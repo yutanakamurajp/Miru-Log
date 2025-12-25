@@ -17,6 +17,7 @@ Analyze what the user was doing. Respond strictly as compact JSON with keys:
   - primary_task: concise task label (<=6 words).
   - tags: array of activity tags/keywords.
   - confidence: float between 0 and 1 reflecting your certainty.
+All values must be written in Japanese. The JSON keys must remain in English as listed above.
 Focus on observable actions only.
 """
 
