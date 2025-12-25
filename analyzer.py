@@ -26,14 +26,25 @@ def main() -> None:
         return
 
     logger.info("Analyzing %s pending captures", len(pending))
-    for record in pending:
+    for index, record in enumerate(pending, start=1):
         try:
             result = analyzer.analyze(record)
             repo.save_analysis(result)
             capture_manager.archive(record, delete_original=settings.capture.delete_after_analysis)
-            logger.info("Capture %s analyzed -> %s", record.id, result.primary_task)
+            logger.info("Capture %s/%s analyzed (id=%s) -> %s", index, len(pending), record.id, result.primary_task)
         except Exception as exc:
-            logger.exception("Failed to analyze capture %s: %s", record.id, exc)
+            message = str(exc)
+            is_rate_limited = "429" in message or "Quota exceeded" in message or "rate limit" in message.lower()
+            if is_rate_limited:
+                logger.warning(
+                    "Rate limited while analyzing capture %s/%s (id=%s). Stopping this run.",
+                    index,
+                    len(pending),
+                    record.id,
+                )
+                logger.exception("Last error: %s", exc)
+                break
+            logger.exception("Failed to analyze capture %s/%s (id=%s): %s", index, len(pending), record.id, exc)
 
 
 if __name__ == "__main__":

@@ -24,6 +24,9 @@ class GeminiSettings:
     model: str
     max_tokens: int
     temperature: float
+    max_retries: int = 5
+    retry_buffer_seconds: float = 0.5
+    request_spacing_seconds: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -77,6 +80,9 @@ def get_settings() -> AppSettings:
         model=os.getenv("GEMINI_MODEL", "gemini-pro-vision"),
         max_tokens=int(os.getenv("GEMINI_MAX_TOKENS", "1024")),
         temperature=float(os.getenv("GEMINI_TEMPERATURE", "0.4")),
+        max_retries=int(os.getenv("GEMINI_MAX_RETRIES", "5")),
+        retry_buffer_seconds=float(os.getenv("GEMINI_RETRY_BUFFER_SECONDS", "0.5")),
+        request_spacing_seconds=float(os.getenv("GEMINI_REQUEST_SPACING_SECONDS", "0")),
     )
 
     visualization = VisualizationSettings(
