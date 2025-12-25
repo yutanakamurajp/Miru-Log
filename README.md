@@ -53,6 +53,32 @@ reports/            # 最終的な `YYYYMMDD_log.md` の配置先（Git 管理�
 
 Windows タスク スケジューラを使えば、observer をログオン時に常駐させ、analyzer を定期実行、summarizer/notifier を深夜に実行するなどの完全自動化が可能です。
 
+## トレイ常駐コントローラ
+
+`tray.py` を起動すると、トレイから各エージェントの Start/Stop、ステータス確認、ログ/出力フォルダを開く操作ができます。
+
+### 手動起動
+
+```
+python tray.py
+```
+
+### タスクスケジューラでログオン時に自動起動
+
+PowerShell から以下を実行します（`pythonw.exe` のパスは環境に合わせて変更）。
+
+```powershell
+schtasks /Create /TN "Miru-Log Tray" /SC ONLOGON /RL LIMITED /F /IT `
+  /RU "$env:USERNAME" `
+  /TR "\"C:\Users\nakamura\Dropbox\Repository\Miru-Log\.venv\Scripts\pythonw.exe\" \"C:\Users\nakamura\Dropbox\Repository\Miru-Log\tray.py\""
+```
+
+削除する場合:
+
+```powershell
+schtasks /Delete /TN "Miru-Log Tray" /F
+```
+
 ## プライバシーと運用上の注意
 
 - `data/captures/` と `output/`, `reports/` は Git から除外済みです。解析後に画像を即削除するか、短期アーカイブするかは `.env` で切り替えられます。

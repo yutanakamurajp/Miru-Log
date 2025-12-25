@@ -7,3 +7,5 @@ requests>=2.31.0
 pandas>=2.2.0
 matplotlib>=3.8.0
 psutil>=5.9.0
+pystray>=0.19.5
+pywin32>=306
