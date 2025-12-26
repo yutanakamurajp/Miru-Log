@@ -30,6 +30,21 @@ class GeminiSettings:
 
 
 @dataclass(frozen=True)
+class LocalLLMSettings:
+    base_url: str
+    api_key: str | None
+    model: str
+    max_tokens: int
+    temperature: float
+    timeout_seconds: float = 60.0
+
+
+@dataclass(frozen=True)
+class AnalyzerSettings:
+    backend: str  # "gemini" or "local"
+
+
+@dataclass(frozen=True)
 class VisualizationSettings:
     endpoint: str
     api_key: str | None
@@ -53,7 +68,9 @@ class OutputSettings:
 class AppSettings:
     timezone: ZoneInfo
     capture: CaptureSettings
+    analyzer: AnalyzerSettings
     gemini: GeminiSettings
+    local_llm: LocalLLMSettings
     visualization: VisualizationSettings
     logging: LoggingSettings
     output: OutputSettings
@@ -75,14 +92,31 @@ def get_settings() -> AppSettings:
         delete_after_analysis=_as_bool(os.getenv("DELETE_CAPTURE_AFTER_ANALYSIS", "true")),
     )
 
+    analyzer_settings = AnalyzerSettings(
+        backend=os.getenv("ANALYZER_BACKEND", "gemini").strip().lower(),
+    )
+
+    gemini_api_key = os.getenv("GEMINI_API_KEY")
+    if analyzer_settings.backend != "local":
+        gemini_api_key = _require("GEMINI_API_KEY")
+
     gemini = GeminiSettings(
-        api_key=_require("GEMINI_API_KEY"),
+        api_key=gemini_api_key or "",
         model=os.getenv("GEMINI_MODEL", "gemini-pro-vision"),
         max_tokens=int(os.getenv("GEMINI_MAX_TOKENS", "1024")),
         temperature=float(os.getenv("GEMINI_TEMPERATURE", "0.4")),
         max_retries=int(os.getenv("GEMINI_MAX_RETRIES", "5")),
         retry_buffer_seconds=float(os.getenv("GEMINI_RETRY_BUFFER_SECONDS", "0.5")),
         request_spacing_seconds=float(os.getenv("GEMINI_REQUEST_SPACING_SECONDS", "0")),
+    )
+
+    local_llm = LocalLLMSettings(
+        base_url=os.getenv("LOCAL_LLM_BASE_URL", "http://localhost:1234/v1").rstrip("/"),
+        api_key=os.getenv("LOCAL_LLM_API_KEY") or None,
+        model=os.getenv("LOCAL_LLM_MODEL", "local-model"),
+        max_tokens=int(os.getenv("LOCAL_LLM_MAX_TOKENS", "1024")),
+        temperature=float(os.getenv("LOCAL_LLM_TEMPERATURE", "0.4")),
+        timeout_seconds=float(os.getenv("LOCAL_LLM_TIMEOUT_SECONDS", "60")),
     )
 
     visualization = VisualizationSettings(
@@ -105,7 +139,9 @@ def get_settings() -> AppSettings:
     return AppSettings(
         timezone=timezone,
         capture=capture,
+        analyzer=analyzer_settings,
         gemini=gemini,
+        local_llm=local_llm,
         visualization=visualization,
         logging=logging_settings,
         output=output_settings,

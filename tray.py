@@ -63,6 +63,7 @@ class TrayController:
         self.logger = init_logger("tray", self.settings.log_dir, self.settings.log_level)
         self.state_path = self.settings.data_dir / STATE_FILE
         self.state: dict[str, Any] = self._load_state()
+        self.analyzer_backend = self._load_analyzer_backend()
         self.processes: dict[str, subprocess.Popen] = {}
         self.lock = threading.Lock()
         self.programs = [
@@ -88,6 +89,8 @@ class TrayController:
         items.extend(
             [
                 pystray.Menu.SEPARATOR,
+                pystray.MenuItem("解析バックエンド", self._backend_menu()),
+                pystray.Menu.SEPARATOR,
                 pystray.MenuItem("ログフォルダを開く", self._open_logs),
                 pystray.MenuItem("出力フォルダを開く", self._open_output),
                 pystray.MenuItem("レポートフォルダを開く", self._open_reports),
@@ -97,6 +100,20 @@ class TrayController:
             ]
         )
         return pystray.Menu(*items)
+
+    def _backend_menu(self) -> pystray.Menu:
+        return pystray.Menu(
+            pystray.MenuItem(
+                "Gemini",
+                lambda *_: self._set_analyzer_backend("gemini"),
+                checked=lambda _: self.analyzer_backend == "gemini",
+            ),
+            pystray.MenuItem(
+                "Local (LM Studio)",
+                lambda *_: self._set_analyzer_backend("local"),
+                checked=lambda _: self.analyzer_backend == "local",
+            ),
+        )
 
     def _program_menu(self, program: ProgramSpec) -> pystray.MenuItem:
         status_item = pystray.MenuItem(
@@ -158,10 +175,14 @@ class TrayController:
 
     def _spawn(self, script: str) -> subprocess.Popen:
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        env = os.environ.copy()
+        if script == "analyzer.py":
+            env["ANALYZER_BACKEND"] = self.analyzer_backend
         proc = subprocess.Popen(
             [sys.executable, script],
             cwd=self.settings.repo_root,
             creationflags=creation_flags,
+            env=env,
         )
         with self.lock:
             self.processes[script] = proc
@@ -216,7 +237,7 @@ class TrayController:
         except Exception as exc:
             self.logger.warning("Failed to open %s: %s", path, exc)
 
-    def _quit(self, icon: pystray.Icon, _: pystray.MenuItem) -> None:
+    def _quit(self, icon: Any, _: Any) -> None:
         icon.stop()
 
     def _refresh_menu(self) -> None:
@@ -258,7 +279,7 @@ class TrayController:
         for proc in processes:
             try:
                 start_times.append(proc.create_time())
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
+            except (psutil.NoSuchProcess, psutil.AccessDenied, PermissionError, OSError):
                 continue
         if not start_times:
             return True, None
@@ -267,10 +288,12 @@ class TrayController:
     def _find_processes(self, script: str) -> list[psutil.Process]:
         matches = []
         target = script.lower()
-        for proc in psutil.process_iter(["pid", "cmdline", "create_time"]):
+        # NOTE: On Windows, requesting "create_time" during iteration can raise
+        # PermissionError for protected processes. We only need cmdline here.
+        for proc in psutil.process_iter(attrs=["pid", "cmdline"], ad_value=None):
             try:
                 cmdline = proc.info.get("cmdline") or []
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
+            except (psutil.NoSuchProcess, psutil.AccessDenied, PermissionError, OSError):
                 continue
             if any(target in str(part).lower() for part in cmdline):
                 matches.append(proc)
@@ -294,6 +317,33 @@ class TrayController:
                 json.dumps(self.state, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+
+    def _load_analyzer_backend(self) -> str:
+        # Persisted selection wins. Fallback to env, then default.
+        global_entry = self.state.get("_global", {})
+        if isinstance(global_entry, dict):
+            raw = global_entry.get("analyzer_backend")
+            if isinstance(raw, str) and raw.strip():
+                return raw.strip().lower()
+        return os.getenv("ANALYZER_BACKEND", "gemini").strip().lower()
+
+    def _set_analyzer_backend(self, backend: str) -> None:
+        backend = (backend or "").strip().lower()
+        if backend not in {"gemini", "local"}:
+            return
+        self.analyzer_backend = backend
+        with self.lock:
+            global_entry = self.state.get("_global")
+            if not isinstance(global_entry, dict):
+                global_entry = {}
+            global_entry["analyzer_backend"] = backend
+            self.state["_global"] = global_entry
+            self.state_path.write_text(
+                json.dumps(self.state, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        self.logger.info("Analyzer backend set to %s", backend)
+        self._refresh_menu()
 
 
 def _format_time(value: datetime | None) -> str:

@@ -25,7 +25,9 @@ reports/            # 最終的な `YYYYMMDD_log.md` の配置先（Git 管理�
 1. Windows 10/11 で Python 3.10 以上をインストールし、仮想環境を作成します。
 2. `pip install -r requirements.txt`
 3. `.env.example` を `.env` にコピーし、以下の値を設定します。
-   - Google Gemini の API キー（必須）
+   - 解析バックエンド（`ANALYZER_BACKEND`）
+   - Google Gemini の API キー（`ANALYZER_BACKEND=gemini` の場合のみ必須）
+   - ローカル LLM（LM Studio）設定（`ANALYZER_BACKEND=local` の場合）
    - Nanobanana Pro の API キー（`ENABLE_VISUALIZATION=true` の場合のみ必須）
    - キャプチャ間隔、アイドル閾値、タイムゾーン、ログ保存先
    - `REPORT_EXPORT_DIR`（最終的な `YYYYMMDD_log.md` を配置したいフォルダ）
@@ -40,8 +42,32 @@ reports/            # 最終的な `YYYYMMDD_log.md` の配置先（Git 管理�
    - SQLite にウィンドウタイトル、前面プロセス、ハッシュなどのメタデータを記録します。
 
 2. `python analyzer.py --limit 30`
-   - 未解析のキャプチャを取得し、Gemini Vision に画像と文脈（ウィンドウ情報）を送信します。
+    - 未解析のキャプチャを取得し、`ANALYZER_BACKEND` に応じて Gemini またはローカル LLM に画像と文脈（ウィンドウ情報）を送信します。
    - 解析結果を DB に保存し、`DELETE_CAPTURE_AFTER_ANALYSIS` に応じて画像を削除または `data/archive/<date>/` へ移動します。
+
+### 解析バックエンド切り替え（Gemini / ローカル LLM）
+
+- **Gemini を使う（デフォルト）**
+   - `.env`:
+      - `ANALYZER_BACKEND=gemini`
+      - `GEMINI_API_KEY=...`
+
+- **LM Studio（ローカル LLM）を使う**
+   - LM Studio を起動し、OpenAI互換サーバが `http://localhost:1234/v1` で動いている状態にします
+   - `.env`:
+      - `ANALYZER_BACKEND=local`
+      - `LOCAL_LLM_BASE_URL=http://localhost:1234/v1`（未設定でもデフォルトでこの値）
+      - `LOCAL_LLM_MODEL=auto`（未設定/auto の場合は `GET /v1/models` から自動選択）
+
+> 画像入力に対応していないモデルだと、解析時にLM Studio側がエラーを返す場合があります。その場合は画像対応モデルに切り替えてください。
+
+### Gemini の 429（クオータ/レート制限）対策
+
+Gemini free tier 等で `429 Quota exceeded` が出る場合、以下を `.env` で調整できます。
+
+- `GEMINI_MAX_RETRIES` / `GEMINI_RETRY_BUFFER_SECONDS`: サーバが提示する待ち時間に従ってリトライ
+- `GEMINI_REQUEST_SPACING_SECONDS`: リクエスト間隔を固定で空けて、429自体を起こしにくくする
+   - 例: 5 req/min の場合は `12` 秒程度
 
 3. `python summarizer.py --date 2025-12-25`
    - 指定日の解析結果を集計し、タスク単位のセグメント化やブロッカー/フォローアップ抽出を行います。
@@ -56,6 +82,8 @@ Windows タスク スケジューラを使えば、observer をログオン時�
 ## トレイ常駐コントローラ
 
 `tray.py` を起動すると、トレイから各エージェントの Start/Stop、ステータス確認、ログ/出力フォルダを開く操作ができます。
+
+また「解析バックエンド（Gemini / Local）」をトレイ上で切り替えできます。切り替えは `.env` を書き換えず、トレイから `analyzer.py` を起動する時にだけ反映されます（次回起動から有効）。
 
 ### 手動起動
 

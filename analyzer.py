@@ -5,6 +5,7 @@ import argparse
 from mirulog.capture import CaptureManager
 from mirulog.config import get_settings
 from mirulog.gemini_client import GeminiAnalyzer
+from mirulog.local_llm_client import LocalLLMAnalyzer
 from mirulog.logging_utils import init_logger
 from mirulog.storage import ObservationRepository
 
@@ -18,7 +19,12 @@ def main() -> None:
     logger = init_logger("analyzer", settings.logging.directory, settings.logging.level)
     repo = ObservationRepository(settings.capture.archive_root / "mirulog.db")
     capture_manager = CaptureManager(settings.capture.capture_root, settings.capture.archive_root, settings.timezone, logger)
-    analyzer = GeminiAnalyzer(settings.gemini, logger)
+    if settings.analyzer.backend == "local":
+        analyzer = LocalLLMAnalyzer(settings.local_llm, logger)
+        logger.info("Analyzer backend: local (%s)", settings.local_llm.base_url)
+    else:
+        analyzer = GeminiAnalyzer(settings.gemini, logger)
+        logger.info("Analyzer backend: gemini (%s)", settings.gemini.model)
 
     pending = repo.pending_captures(limit=args.limit)
     if not pending:
