@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from datetime import datetime, timedelta
 from typing import List
 
@@ -44,12 +45,28 @@ def build_daily_summary(rows, date_str: str, interval_seconds: int) -> DailySumm
     blocking: List[str] = []
     followups: List[str] = []
     current = None
+    observed_files: set[str] = set()
+    observed_repos: set[str] = set()
+    observed_urls: set[str] = set()
 
-    for capture_id, ts_str, window_title, app, description, task, confidence, tags_str in rows:
+    for capture_id, ts_str, window_title, app, description, task, confidence, tags_str, raw_response in rows:
         ts = datetime.fromisoformat(ts_str)
         task = task or "Unclassified"
         tags = [t.strip() for t in (tags_str or "").split(",") if t.strip()]
         highlight = f"{ts.strftime('%H:%M')} {description}"
+
+        payload = _best_effort_parse_json(raw_response or "")
+        observed_files.update(_coerce_str_list(payload.get("observed_files")))
+        observed_repos.update(_coerce_str_list(payload.get("observed_repositories")))
+        observed_urls.update(_coerce_str_list(payload.get("observed_urls")))
+
+        # Backward-compatible heuristic extraction for older rows.
+        observed_files.update(_extract_file_like_tokens(window_title or ""))
+        observed_files.update(_extract_file_like_tokens(description or ""))
+        repo_from_title = _extract_vscode_workspace_name(window_title or "")
+        if repo_from_title:
+            observed_repos.add(repo_from_title)
+        observed_urls.update(_extract_urls(description or ""))
 
         if any(keyword in description.lower() for keyword in ("error", "fail", "exception")):
             blocking.append(description)
@@ -82,6 +99,13 @@ def build_daily_summary(rows, date_str: str, interval_seconds: int) -> DailySumm
         follow_ups=followups[:5],
         total_active_minutes=total_active_minutes,
         markdown_path=None,
+        dev_context={
+            "observed_files": sorted(observed_files),
+            "observed_repositories": sorted(observed_repos),
+            "observed_urls": sorted(observed_urls),
+        }
+        if (observed_files or observed_repos or observed_urls)
+        else None,
     )
 
 def _finalize_segment(segment_state, interval_minutes: float) -> SummarySegment:
@@ -97,6 +121,25 @@ def render_markdown(summary: DailySummary) -> str:
     lines = [f"# {header_date} の Miru-Log 日報", ""]
     lines.append(f"- アクティブ時間: **{summary.total_active_minutes:.1f} 分**")
     lines.append(f"- セグメント数: {len(summary.segments)}")
+
+    if summary.dev_context:
+        lines.append("\n## 開発コンテキスト\n")
+        repos = summary.dev_context.get("observed_repositories") or []
+        files = summary.dev_context.get("observed_files") or []
+        urls = summary.dev_context.get("observed_urls") or []
+
+        if repos:
+            lines.append("- Repo/Workspace (画面から推定):")
+            for name in repos:
+                lines.append(f"  - {name}")
+        if files:
+            lines.append("- ファイル (画面から推定):")
+            for p in files:
+                lines.append(f"  - {p}")
+        if urls:
+            lines.append("- URL (画面から推定):")
+            for u in urls:
+                lines.append(f"  - {u}")
 
     lines.append("\n## タスク別累計時間")
     lines.append("| タスク | 合計時間 (分) | 割合 |")
@@ -152,6 +195,7 @@ def to_dict(summary: DailySummary) -> dict:
     return {
         "date": summary.date,
         "total_active_minutes": summary.total_active_minutes,
+        "dev_context": summary.dev_context,
         "segments": [
             {
                 "period": segment.period_label,
@@ -164,6 +208,86 @@ def to_dict(summary: DailySummary) -> dict:
         "blocking_issues": summary.blocking_issues,
         "follow_ups": summary.follow_ups,
     }
+
+def _best_effort_parse_json(text: str) -> dict:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return {}
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[1]
+        if "```" in cleaned:
+            cleaned = cleaned.split("```", 1)[0]
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        return {}
+
+
+def _coerce_str_list(value) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    return [str(value).strip()] if str(value).strip() else []
+
+
+_FILE_TOKEN_RE = re.compile(
+    r"\b[\w./\\-]+\.(?:py|md|txt|json|ya?ml|toml|ini|cfg|csv|ts|js|jsx|tsx|html|css|ps1|bat|sh|ipynb)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_file_like_tokens(text: str) -> list[str]:
+    if not text:
+        return []
+    return [m.group(0) for m in _FILE_TOKEN_RE.finditer(text)]
+
+
+def _extract_urls(text: str) -> list[str]:
+    if not text:
+        return []
+    # Simple URL regex: stop at whitespace.
+    return re.findall(r"https?://\S+", text)
+
+
+def _extract_vscode_workspace_name(window_title: str) -> str | None:
+    # Typical: "<file> - <workspace> - Visual Studio Code" or "<workspace> - Visual Studio Code"
+    if not window_title:
+        return None
+    if "Visual Studio Code" not in window_title:
+        return None
+    parts = [p.strip() for p in window_title.split(" - ") if p.strip()]
+    if not parts:
+        return None
+    # Remove trailing "Visual Studio Code"
+    if parts and "Visual Studio Code" in parts[-1]:
+        parts = parts[:-1]
+    if not parts:
+        return None
+    # If there are 2+ parts left, the last one is usually workspace.
+    if len(parts) >= 2:
+        candidate = parts[-1].strip()
+        return _filter_workspace_candidate(candidate)
+    # Single part might be workspace.
+    return _filter_workspace_candidate(parts[0].strip())
+
+
+def _filter_workspace_candidate(candidate: str) -> str | None:
+    if not candidate:
+        return None
+    # VS Code often includes diagnostic/status strings in the title; exclude obvious noise.
+    noise_keywords = [
+        "このファイルに",
+        "問題",
+        "変更済み",
+        "保留中",
+        "チャット",
+    ]
+    if any(k in candidate for k in noise_keywords):
+        return None
+    if len(candidate) > 60:
+        return None
+    return candidate
 
 
 if __name__ == "__main__":

@@ -113,7 +113,7 @@ class ObservationRepository:
 
     def daily_analysis(self, date_prefix: str) -> List[tuple]:
         query = """
-            SELECT c.id, c.captured_at, c.window_title, c.active_application, a.description, a.primary_task, a.confidence, a.tags
+            SELECT c.id, c.captured_at, c.window_title, c.active_application, a.description, a.primary_task, a.confidence, a.tags, a.raw_response
             FROM captures c
             JOIN analysis a ON c.id = a.capture_id
             WHERE substr(c.captured_at, 1, 10) = ?

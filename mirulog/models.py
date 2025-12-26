@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 
 @dataclass
@@ -43,3 +43,4 @@ class DailySummary:
     follow_ups: List[str]
     total_active_minutes: float
     markdown_path: Path | None = None
+    dev_context: dict[str, Any] | None = None

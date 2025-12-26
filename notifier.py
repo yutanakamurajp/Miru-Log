@@ -43,6 +43,26 @@ def render_japanese_report(summary: DailySummary) -> str:
     lines.append(f"- セグメント数: {len(summary.segments)}")
     lines.append("")
 
+    if summary.dev_context:
+        repos = summary.dev_context.get("observed_repositories") or []
+        files = summary.dev_context.get("observed_files") or []
+        urls = summary.dev_context.get("observed_urls") or []
+
+        lines.append("## 開発コンテキスト")
+        if repos:
+            lines.append("- Repo/Workspace (画面から推定):")
+            for name in repos:
+                lines.append(f"  - {name}")
+        if files:
+            lines.append("- ファイル (画面から推定):")
+            for p in files:
+                lines.append(f"  - {p}")
+        if urls:
+            lines.append("- URL (画面から推定):")
+            for u in urls:
+                lines.append(f"  - {u}")
+        lines.append("")
+
     lines.append("## タスク別累計時間")
     lines.append("| タスク | 合計時間 (分) | 割合 |")
     lines.append("| --- | ---: | ---: |")
@@ -139,6 +159,7 @@ def load_summary(summary_dir: Path, date_str: str) -> DailySummary:
         follow_ups=data.get("follow_ups", []),
         total_active_minutes=float(data.get("total_active_minutes", 0.0)),
         markdown_path=None,
+        dev_context=data.get("dev_context"),
     )
     return summary
 

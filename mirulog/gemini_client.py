@@ -20,8 +20,12 @@ Analyze what the user was doing. Respond strictly as compact JSON with keys:
   - primary_task: concise task label (<=6 words).
   - tags: array of activity tags/keywords.
   - confidence: float between 0 and 1 reflecting your certainty.
+    - observed_files: array of file paths/names you can read from the screenshot (if any).
+    - observed_repositories: array of repository/workspace names you can read from the screenshot (if any).
+    - observed_urls: array of http(s) URLs you can read from the screenshot (if any).
 All values must be written in Japanese. The JSON keys must remain in English as listed above.
 Focus on observable actions only.
+If you cannot confidently read items, return empty arrays for those keys.
 """
 
 
