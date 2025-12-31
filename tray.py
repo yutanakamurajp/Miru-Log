@@ -5,8 +5,10 @@ import os
 import subprocess
 import sys
 import threading
-from dataclasses import dataclass
+import time
 from datetime import datetime
+from dataclasses import dataclass
+from json import JSONDecodeError
 from pathlib import Path
 from typing import Any
 
@@ -56,12 +58,32 @@ def load_settings() -> TraySettings:
     )
 
 
+def _read_tray_state(path: Path) -> dict[str, Any]:
+    # JSON書き込み直後の競合を避けるため、短いリトライを入れる
+    for _ in range(2):
+        try:
+            raw = path.read_text(encoding="utf-8")
+            if not raw.strip():
+                return {}
+            return json.loads(raw)
+        except (OSError, JSONDecodeError):
+            time.sleep(0.05)
+    return {}
+
+
+def _write_tray_state_atomic(path: Path, state: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
 class TrayController:
     def __init__(self) -> None:
         self.settings = load_settings()
         self.settings.data_dir.mkdir(parents=True, exist_ok=True)
         self.logger = init_logger("tray", self.settings.log_dir, self.settings.log_level)
-        self.state_path = self.settings.data_dir / STATE_FILE
+        self._state_path = self.settings.data_dir / STATE_FILE
         self.state: dict[str, Any] = self._load_state()
         self.analyzer_backend = self._load_analyzer_backend()
         self.processes: dict[str, subprocess.Popen] = {}
@@ -173,14 +195,16 @@ class TrayController:
         thread.start()
         self._refresh_menu()
 
-    def _spawn(self, script: str) -> subprocess.Popen:
+    def _spawn(self, script: str, args: list[str] | None = None) -> subprocess.Popen:
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         env = os.environ.copy()
+        env["TRAY_STATE_PATH"] = str(self._state_path)
         argv = [sys.executable, script]
         if script == "analyzer.py":
             env["ANALYZER_BACKEND"] = self.analyzer_backend
-            env["MIRULOG_TRAY_STATE_PATH"] = str(self.state_path)
             argv.append("--until-empty")
+        if args:
+            argv.extend(args)
         proc = subprocess.Popen(
             argv,
             cwd=self.settings.repo_root,
@@ -256,7 +280,7 @@ class TrayController:
         if running:
             started_text = _format_time(started_at)
             if program.script == "analyzer.py":
-                entry = self.state.get(program.script)
+                entry = self._state_entry(program.script)
                 if isinstance(entry, dict):
                     progress = entry.get("progress")
                     if isinstance(progress, dict):
@@ -275,6 +299,22 @@ class TrayController:
         if last_text == "-":
             return "状態: 停止中 (最終 -)"
         return f"状態: 停止中 (最終 {last_text})"
+
+    def _state_entry(self, script: str) -> dict[str, Any] | None:
+        entry = self.state.get(script)
+        if isinstance(entry, dict):
+            return entry
+        scripts = self.state.get("scripts")
+        if isinstance(scripts, dict):
+            nested = scripts.get(script)
+            if isinstance(nested, dict):
+                return nested
+            # analyzer.py が "analyzer" で書かれるケースも許容
+            if script == "analyzer.py":
+                alt = scripts.get("analyzer")
+                if isinstance(alt, dict):
+                    return alt
+        return None
 
     def _state_time(self, script: str, key: str) -> datetime | None:
         entry = self.state.get(script, {})
@@ -318,23 +358,31 @@ class TrayController:
         return matches
 
     def _load_state(self) -> dict[str, Any]:
-        if not self.state_path.exists():
+        if not self._state_path.exists():
             return {}
-        try:
-            return json.loads(self.state_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as exc:
-            self.logger.warning("Failed to read tray state: %s", exc)
-            return {}
+        state = _read_tray_state(self._state_path)
+        if not state:
+            # _read_tray_state は空/破損時に {} を返す。ログは一度だけ warning。
+            try:
+                raw = self._state_path.read_text(encoding="utf-8")
+                if raw.strip():
+                    json.loads(raw)
+            except (OSError, JSONDecodeError) as exc:
+                self.logger.warning("Failed to read tray state: %s", exc)
+        return state
 
     def _update_state(self, script: str, **updates: Any) -> None:
         with self.lock:
-            entry = dict(self.state.get(script, {}))
+            entry = dict(self._state_entry(script) or {})
             entry.update(updates)
             self.state[script] = entry
-            self.state_path.write_text(
-                json.dumps(self.state, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            # analyzer.py 側が scripts ネストに書くため、tray 側も同期しておく
+            scripts = self.state.setdefault("scripts", {})
+            if isinstance(scripts, dict):
+                nested = dict(scripts.get(script, {})) if isinstance(scripts.get(script), dict) else {}
+                nested.update(updates)
+                scripts[script] = nested
+            _write_tray_state_atomic(self._state_path, self.state)
 
     def _load_analyzer_backend(self) -> str:
         # Persisted selection wins. Fallback to env, then default.
@@ -356,7 +404,7 @@ class TrayController:
                 global_entry = {}
             global_entry["analyzer_backend"] = backend
             self.state["_global"] = global_entry
-            self.state_path.write_text(
+            self._state_path.write_text(
                 json.dumps(self.state, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )

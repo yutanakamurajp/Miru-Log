@@ -3,6 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import time
+from json import JSONDecodeError
+from typing import Any
 from datetime import datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -13,6 +16,44 @@ from mirulog.gemini_client import GeminiAnalyzer
 from mirulog.local_llm_client import LocalLLMAnalyzer
 from mirulog.logging_utils import init_logger
 from mirulog.storage import ObservationRepository
+
+
+def _update_tray_state(path: Path | None, script_key: str, updates: dict[str, Any]) -> None:
+    """Write tray_state.json safely (atomic replace) to avoid truncated/empty JSON reads."""
+    if path is None:
+        return
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    # read current (tolerant)
+    state: dict[str, Any] = {}
+    if path.exists():
+        try:
+            raw = path.read_text(encoding="utf-8")
+            if raw.strip():
+                state = json.loads(raw)
+        except (OSError, JSONDecodeError):
+            # if corrupted/empty due to concurrent write, start fresh
+            state = {}
+
+    # Keep both top-level and nested "scripts" in sync for backward/forward compatibility.
+    top_entry = state.setdefault(script_key, {})
+    if isinstance(top_entry, dict):
+        top_entry.update(updates)
+        top_entry["updated_at"] = datetime.now().isoformat(timespec="seconds")
+
+    scripts = state.setdefault("scripts", {})
+    if isinstance(scripts, dict):
+        entry = scripts.setdefault(script_key, {})
+        if isinstance(entry, dict):
+            entry.update(updates)
+            entry["updated_at"] = datetime.now().isoformat(timespec="seconds")
+
+    # atomic write: temp -> replace
+    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
+    data = json.dumps(state, ensure_ascii=False, indent=2)
+    tmp.write_text(data, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def main() -> None:
@@ -32,111 +73,97 @@ def main() -> None:
 
     settings = get_settings()
     logger = init_logger("analyzer", settings.logging.directory, settings.logging.level)
-    repo = ObservationRepository(settings.capture.archive_root / "mirulog.db")
-    capture_manager = CaptureManager(settings.capture.capture_root, settings.capture.archive_root, settings.timezone, logger)
 
-    tray_state_path = os.getenv("MIRULOG_TRAY_STATE_PATH")
-    tray_state_file = Path(tray_state_path).resolve() if tray_state_path else None
-    if settings.analyzer.backend == "local":
-        analyzer = LocalLLMAnalyzer(settings.local_llm, logger)
-        logger.info("Analyzer backend: local (%s)", settings.local_llm.base_url)
-    else:
-        analyzer = GeminiAnalyzer(settings.gemini, logger)
-        logger.info("Analyzer backend: gemini (%s)", settings.gemini.model)
+    tray_state_path = os.getenv("TRAY_STATE_PATH")
+    tray_state_file = Path(tray_state_path) if tray_state_path else None
 
-    if args.limit is None:
-        batch_size = 1_000_000 if settings.analyzer.backend == "local" else 20
-    else:
-        batch_size = max(1, int(args.limit))
-    total_processed = 0
+    _update_tray_state(
+        tray_state_file,
+        "analyzer.py",
+        {"status": "running", "pid": os.getpid(), "limit": args.limit, "until_empty": args.until_empty},
+    )
 
-    def write_progress(*, last_task: str | None = None, last_capture_id: int | None = None) -> None:
-        if not tray_state_file:
-            return
-        try:
-            pending = repo.pending_count()
-        except Exception:
-            pending = None
-        progress = {
-            "processed": total_processed,
-            "pending": pending,
-            "last_task": last_task,
-            "last_capture_id": last_capture_id,
-            "updated_at": datetime.now().isoformat(),
-        }
-        _update_tray_state(tray_state_file, "analyzer.py", {"progress": progress})
+    try:
+        repo = ObservationRepository(settings.capture.archive_root / "mirulog.db")
+        capture_manager = CaptureManager(settings.capture.capture_root, settings.capture.archive_root, settings.timezone, logger)
 
-    while True:
-        pending = repo.pending_captures(limit=batch_size)
-        if not pending:
-            if total_processed == 0:
-                logger.info("No pending captures to analyze")
-            else:
-                logger.info("No pending captures remain (processed=%s)", total_processed)
-            return
+        if settings.analyzer.backend == "local":
+            analyzer = LocalLLMAnalyzer(settings.local_llm, logger)
+            logger.info("Analyzer backend: local (%s)", settings.local_llm.base_url)
+        else:
+            analyzer = GeminiAnalyzer(settings.gemini, logger)
+            logger.info("Analyzer backend: gemini (%s)", settings.gemini.model)
 
-        logger.info("Analyzing %s pending captures", len(pending))
-        write_progress()
-        for index, record in enumerate(pending, start=1):
+        if args.limit is None:
+            batch_size = 1_000_000 if settings.analyzer.backend == "local" else 20
+        else:
+            batch_size = max(1, int(args.limit))
+        total_processed = 0
+
+        def write_progress(*, last_task: str | None = None, last_capture_id: int | None = None) -> None:
+            if not tray_state_file:
+                return
             try:
-                result = analyzer.analyze(record)
-                repo.save_analysis(result)
-                capture_manager.archive(record, delete_original=settings.capture.delete_after_analysis)
-                total_processed += 1
-                write_progress(last_task=result.primary_task, last_capture_id=record.id)
-                logger.info(
-                    "Capture %s/%s analyzed (id=%s) -> %s",
-                    index,
-                    len(pending),
-                    record.id,
-                    result.primary_task,
-                )
-            except Exception as exc:
-                message = str(exc)
-                is_rate_limited = "429" in message or "Quota exceeded" in message or "rate limit" in message.lower()
-                if is_rate_limited:
-                    logger.warning(
-                        "Rate limited while analyzing capture %s/%s (id=%s). Stopping this run.",
+                pending = repo.pending_count()
+            except Exception:
+                pending = None
+            progress = {
+                "processed": total_processed,
+                "pending": pending,
+                "last_task": last_task,
+                "last_capture_id": last_capture_id,
+                "updated_at": datetime.now().isoformat(),
+            }
+            _update_tray_state(tray_state_file, "analyzer.py", {"progress": progress})
+
+        while True:
+            pending = repo.pending_captures(limit=batch_size)
+            if not pending:
+                if total_processed == 0:
+                    logger.info("No pending captures to analyze")
+                else:
+                    logger.info("No pending captures remain (processed=%s)", total_processed)
+                return
+
+            logger.info("Analyzing %s pending captures", len(pending))
+            write_progress()
+            for index, record in enumerate(pending, start=1):
+                try:
+                    result = analyzer.analyze(record)
+                    repo.save_analysis(result)
+                    capture_manager.archive(record, delete_original=settings.capture.delete_after_analysis)
+                    total_processed += 1
+                    write_progress(last_task=result.primary_task, last_capture_id=record.id)
+                    logger.info(
+                        "Capture %s/%s analyzed (id=%s) -> %s",
                         index,
                         len(pending),
                         record.id,
+                        result.primary_task,
                     )
-                    logger.exception("Last error: %s", exc)
+                except Exception as exc:
+                    message = str(exc)
+                    is_rate_limited = "429" in message or "Quota exceeded" in message or "rate limit" in message.lower()
+                    if is_rate_limited:
+                        logger.warning(
+                            "Rate limited while analyzing capture %s/%s (id=%s). Stopping this run.",
+                            index,
+                            len(pending),
+                            record.id,
+                        )
+                        logger.exception("Last error: %s", exc)
+                        _update_tray_state(tray_state_file, "analyzer.py", {"last_error": str(exc)})
+                        return
+                    logger.exception("Failed to analyze capture %s/%s (id=%s): %s", index, len(pending), record.id, exc)
                     _update_tray_state(tray_state_file, "analyzer.py", {"last_error": str(exc)})
-                    return
-                logger.exception("Failed to analyze capture %s/%s (id=%s): %s", index, len(pending), record.id, exc)
-                _update_tray_state(tray_state_file, "analyzer.py", {"last_error": str(exc)})
 
-        if not args.until_empty:
-            return
+            if not args.until_empty:
+                return
 
-
-def _update_tray_state(path: Path | None, script_key: str, updates: dict) -> None:
-    if not path:
-        return
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        state: dict = {}
-        if path.exists():
-            try:
-                state = json.loads(path.read_text(encoding="utf-8"))
-            except Exception:
-                state = {}
-
-        entry = state.get(script_key)
-        if not isinstance(entry, dict):
-            entry = {}
-        entry.update(updates)
-        state[script_key] = entry
-
-        # Atomic-ish write on Windows: write temp then replace.
-        with NamedTemporaryFile("w", delete=False, encoding="utf-8", dir=str(path.parent)) as tmp:
-            tmp.write(json.dumps(state, ensure_ascii=False, indent=2))
-            tmp_path = Path(tmp.name)
-        tmp_path.replace(path)
-    except Exception:
-        # Never fail analyzer due to tray state issues.
-        return
+        _update_tray_state(tray_state_file, "analyzer", {"status": "finished", "exit_code": 0})
+    except Exception as e:
+        _update_tray_state(tray_state_file, "analyzer", {"status": "error", "error": repr(e), "exit_code": 1})
+        raise
 
 
 if __name__ == "__main__":

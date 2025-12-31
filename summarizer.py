@@ -25,9 +25,17 @@ def main() -> None:
     rows = repo.daily_analysis(target_date)
     if not rows:
         logger.warning("No analyzed captures for %s", target_date)
-        return
-
-    summary = build_daily_summary(rows, target_date, settings.capture.interval_seconds)
+        summary = DailySummary(
+            date=target_date,
+            segments=[],
+            blocking_issues=[],
+            follow_ups=[],
+            total_active_minutes=0.0,
+            markdown_path=None,
+            dev_context=None,
+        )
+    else:
+        summary = build_daily_summary(rows, target_date, settings.capture.interval_seconds)
     summary_dir = settings.output.summary_dir
     summary_dir.mkdir(parents=True, exist_ok=True)
     markdown_path = summary_dir / f"daily-report-{target_date}.md"

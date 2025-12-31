@@ -33,6 +33,24 @@ class _OpenAIChatResponse:
     text: str
 
 
+def _rdp_hint(window_title: str | None, process_name: str | None) -> str:
+    title = (window_title or "").lower()
+    proc = (process_name or "").lower()
+    is_rdp = any(k in title for k in ["リモート デスクトップ", "remote desktop", "rdp", "mstsc", "msrdc"]) or proc in {
+        "mstsc.exe",
+        "msrdc.exe",
+        "remotedesktop.exe",
+    }
+    if not is_rdp:
+        return ""
+    return (
+        "\n"
+        "IMPORTANT (RDP): If this screenshot is from Remote Desktop, do NOT summarize as just 'using remote desktop'. "
+        "Describe what is happening inside the remote session (apps, code, browser, docs, errors) based on what you see. "
+        "Only mention RDP as a note if you cannot infer the actual work.\n"
+    )
+
+
 class LocalLLMAnalyzer:
     """Analyzer using an OpenAI-compatible HTTP API (e.g., LM Studio).
 
@@ -203,3 +221,13 @@ class LocalLLMAnalyzer:
 
             self._logger.warning("Failed to parse Local LLM JSON. Keeping raw text.")
             return {}
+
+    def _build_prompt(self, record):  # 既存のプロンプト組み立て関数名に合わせてください
+        window_title = getattr(record, "window_title", None)
+        process_name = getattr(record, "process_name", None) or getattr(record, "process", None)
+
+        prompt = (
+            SYSTEM_PROMPT
+            + _rdp_hint(window_title, process_name)
+        )
+        return prompt

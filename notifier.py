@@ -21,7 +21,19 @@ def main() -> None:
     logger = init_logger("notifier", settings.logging.directory, settings.logging.level)
     target_date = args.date or datetime.now(tz=settings.timezone).strftime("%Y-%m-%d")
 
-    summary = load_summary(settings.output.summary_dir, target_date)
+    try:
+        summary = load_summary(settings.output.summary_dir, target_date)
+    except FileNotFoundError as exc:
+        logger.warning("%s (exporting empty report)", exc)
+        summary = DailySummary(
+            date=target_date,
+            segments=[],
+            blocking_issues=[],
+            follow_ups=[],
+            total_active_minutes=0.0,
+            markdown_path=None,
+            dev_context=None,
+        )
 
     export_dir = settings.output.export_dir
     export_dir.mkdir(parents=True, exist_ok=True)

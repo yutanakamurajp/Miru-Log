@@ -29,6 +29,29 @@ If you cannot confidently read items, return empty arrays for those keys.
 """
 
 
+def _rdp_hint(window_title: str | None, process_name: str | None) -> str:
+    title = (window_title or "").lower()
+    proc = (process_name or "").lower()
+    # mstsc.exe: Remote Desktop Connection
+    # msrdc.exe: Microsoft Remote Desktop (new client)
+    is_rdp = any(k in title for k in ["リモート デスクトップ", "remote desktop", "rdp", "mstsc", "msrdc"]) or proc in {
+        "mstsc.exe",
+        "msrdc.exe",
+        "remotedesktop.exe",
+    }
+    if not is_rdp:
+        return ""
+
+    return (
+        "\n"
+        "【重要: リモートデスクトップ(RDP)の扱い】\n"
+        "- このキャプチャはRDPセッションの可能性があります。\n"
+        "- 解析/要約は「リモート利用していた」で終わらせず、画面に映っているリモート先の作業内容"
+        "（開いているアプリ、コード、ブラウザ、資料、エラー等）を主対象として具体化してください。\n"
+        "- 画面から作業内容が読み取れない場合のみ、補足として「RDP経由」と触れて構いません。\n"
+    )
+
+
 class GeminiAnalyzer:
     def __init__(self, settings: GeminiSettings, log):
         self._settings = settings
@@ -150,3 +173,13 @@ class GeminiAnalyzer:
         except json.JSONDecodeError:
             self._logger.warning("Failed to parse Gemini JSON. Keeping raw text.")
             return {}
+
+    def _build_prompt(self, record):  # 既存のプロンプト組み立て関数名に合わせてください
+        window_title = getattr(record, "window_title", None)
+        process_name = getattr(record, "process_name", None) or getattr(record, "process", None)
+
+        prompt = (
+            f"{PROMPT}\nTimestamp: {record.captured_at.isoformat()}\nWindow: {record.window_title}\nApplication: {record.active_application}\n"
+            + _rdp_hint(window_title, process_name)
+        )
+        return prompt
