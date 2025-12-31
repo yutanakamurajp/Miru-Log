@@ -176,10 +176,13 @@ class TrayController:
     def _spawn(self, script: str) -> subprocess.Popen:
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         env = os.environ.copy()
+        argv = [sys.executable, script]
         if script == "analyzer.py":
             env["ANALYZER_BACKEND"] = self.analyzer_backend
+            env["MIRULOG_TRAY_STATE_PATH"] = str(self.state_path)
+            argv.append("--until-empty")
         proc = subprocess.Popen(
-            [sys.executable, script],
+            argv,
             cwd=self.settings.repo_root,
             creationflags=creation_flags,
             env=env,
@@ -247,9 +250,24 @@ class TrayController:
             pass
 
     def _status_text(self, program: ProgramSpec) -> str:
+        # Reload on demand so analyzer progress written by another process is visible.
+        self.state = self._load_state()
         running, started_at = self._running_info(program.script)
         if running:
             started_text = _format_time(started_at)
+            if program.script == "analyzer.py":
+                entry = self.state.get(program.script)
+                if isinstance(entry, dict):
+                    progress = entry.get("progress")
+                    if isinstance(progress, dict):
+                        processed = progress.get("processed")
+                        pending = progress.get("pending")
+                        last_task = progress.get("last_task")
+                        if processed is not None and pending is not None:
+                            tail = f"処理 {processed} / 残り {pending}"
+                            if isinstance(last_task, str) and last_task.strip():
+                                tail += f"・直近 {last_task.strip()}"
+                            return f"状態: 実行中 ({tail})"
             return f"状態: 実行中 (開始 {started_text})"
         last_end = self._state_time(program.script, "last_end")
         last_start = self._state_time(program.script, "last_start")

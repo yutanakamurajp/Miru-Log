@@ -7,9 +7,13 @@ from pathlib import Path
 import pyautogui
 
 from .models import CaptureRecord
-from .utils import ensure_directory, get_active_window, hash_file, timestamp_slug
+from .utils import ensure_directory, get_active_window, hash_file, is_session_locked, timestamp_slug
 
 pyautogui.FAILSAFE = False
+
+
+class CaptureSkipped(RuntimeError):
+    pass
 
 
 class CaptureManager:
@@ -20,6 +24,9 @@ class CaptureManager:
         self._logger = log
 
     def capture(self) -> CaptureRecord:
+        if is_session_locked():
+            raise CaptureSkipped("Session is locked")
+
         timestamp = datetime.now(tz=self._timezone)
         folder = ensure_directory(self._capture_root / timestamp.strftime("%Y-%m-%d"))
         slug = timestamp_slug(timestamp)

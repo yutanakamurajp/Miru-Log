@@ -93,6 +93,17 @@ class ObservationRepository:
             )
         return records
 
+    def pending_count(self) -> int:
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM captures
+                WHERE id NOT IN (SELECT capture_id FROM analysis)
+                """
+            ).fetchone()
+        return int((row or [0])[0])
+
     def save_analysis(self, result: AnalysisResult) -> None:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(

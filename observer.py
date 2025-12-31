@@ -5,7 +5,7 @@ import time
 from datetime import timedelta
 
 from mirulog.activity import InputActivityMonitor
-from mirulog.capture import CaptureManager
+from mirulog.capture import CaptureManager, CaptureSkipped
 from mirulog.config import get_settings
 from mirulog.logging_utils import init_logger
 from mirulog.storage import ObservationRepository
@@ -42,6 +42,8 @@ def main() -> None:
                 record = capture_manager.capture()
                 record.id = repository.add_capture(record)
                 logger.debug("Capture persisted with id=%s", record.id)
+            except CaptureSkipped:
+                logger.debug("Skipped capture because session is locked")
             except Exception as exc:
                 logger.exception("Failed to capture screenshot: %s", exc)
 

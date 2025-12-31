@@ -42,7 +42,11 @@ reports/            # 最終的な `YYYYMMDD_log.md` の配置先（Git 管理�
    - SQLite にウィンドウタイトル、前面プロセス、ハッシュなどのメタデータを記録します。
 
 2. `python analyzer.py --limit 30`
-    - 未解析のキャプチャを取得し、`ANALYZER_BACKEND` に応じて Gemini またはローカル LLM に画像と文脈（ウィンドウ情報）を送信します。
+   - 未解析のキャプチャを取得し、`ANALYZER_BACKEND` に応じて Gemini またはローカル LLM に画像と文脈（ウィンドウ情報）を送信します。
+   - `--limit` は「1回のバッチで処理する件数」です（指定しない場合はバックエンドによりデフォルトが異なります）。
+      - Gemini: デフォルト 20
+      - Local（LM Studio）: デフォルトは実質上限なし（未解析がある限り取得）
+   - `--until-empty` を付けると、未解析が空になるまでバッチ処理を繰り返します（例: `python analyzer.py --until-empty --limit 50`）。
    - 解析結果を DB に保存し、`DELETE_CAPTURE_AFTER_ANALYSIS` に応じて画像を削除または `data/archive/<date>/` へ移動します。
 
 ### 解析バックエンド切り替え（Gemini / ローカル LLM）
@@ -72,6 +76,7 @@ Gemini free tier 等で `429 Quota exceeded` が出る場合、以下を `.env` 
 3. `python summarizer.py --date 2025-12-25`
    - 指定日の解析結果を集計し、タスク単位のセグメント化やブロッカー/フォローアップ抽出を行います。
    - `output/` 以下に `daily-report-YYYY-MM-DD.md` と `daily-report-YYYY-MM-DD.json` を生成します。
+   - 解析の生レスポンス（画面に写っていた情報）から、作業中のファイル名・リポジトリ名・URL などを推定して日報に含めます（読めない場合は空になります）。
 
 4. `python notifier.py --date 2025-12-25`
    - 上記 Markdown を `REPORT_EXPORT_DIR` にコピーし、`YYYYMMDD_log.md` というファイル名で保存します。
@@ -84,6 +89,8 @@ Windows タスク スケジューラを使えば、observer をログオン時�
 `tray.py` を起動すると、トレイから各エージェントの Start/Stop、ステータス確認、ログ/出力フォルダを開く操作ができます。
 
 また「解析バックエンド（Gemini / Local）」をトレイ上で切り替えできます。切り替えは `.env` を書き換えず、トレイから `analyzer.py` を起動する時にだけ反映されます（次回起動から有効）。
+
+トレイから `analyzer.py` を起動した場合は、未解析が空になるまで解析を回し切るモード（`--until-empty`）で動作し、状況（処理済み/残り/直近タスク）がステータス表示に反映されます。
 
 ### 手動起動
 
@@ -118,6 +125,7 @@ schtasks /Delete /TN "Miru-Log Tray" /F
 
 - Gemini / Nanobanana の呼び出し失敗時は `logs/analyzer.log` や `logs/notifier.log` を確認してください。
 - 過去日のレポートを再生成する際は、該当日の `output/daily-report-*` を削除し、`summarizer.py` と `notifier.py` を再実行します。
+- 指定日のレポートが「解析結果なし」になる場合、その日のキャプチャが未解析の可能性があります。まず `analyzer.py` を実行して解析を完了させてください（例: `python analyzer.py --until-empty`）。
 - SQLite のスキーマは `mirulog/storage.py` に記載されています。`data/archive/mirulog.db` を SQLite ビューアで直接確認することも可能です。
 
 ## 今後の拡張アイデア
