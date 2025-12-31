@@ -6,7 +6,7 @@ from typing import Optional
 
 from pynput import keyboard, mouse
 
-from .utils import is_session_locked
+
 
 
 class InputActivityMonitor:
@@ -52,7 +52,7 @@ class InputActivityMonitor:
         idle = datetime.utcnow() - last > self._idle_threshold
         if idle:
             self._logger.debug("System idle for %s", datetime.utcnow() - last)
-        return idle or is_session_locked()
+        return idle
 
     def last_activity(self) -> datetime:
         with self._lock:

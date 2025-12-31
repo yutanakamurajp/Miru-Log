@@ -41,6 +41,13 @@ reports/            # 最終的な `YYYYMMDD_log.md` の配置先（Git 管理�
    - pynput でグローバル入力を監視し、PC がアクティブかつロック解除状態のときのみ `CAPTURE_INTERVAL_SECONDS` ごとにスクリーンショットを保存します。
    - SQLite にウィンドウタイトル、前面プロセス、ハッシュなどのメタデータを記録します。
 
+   **キャプチャ保存先を変更したい場合**
+
+   - `.env` の `CAPTURE_ROOT` / `ARCHIVE_ROOT` を変更
+       - `.env` 内のパスは環境変数展開に対応しています（例: `data/archive/%COMPUTERNAME%`）
+   - または起動引数で上書き（例）:
+     - `python observer.py --capture-root D:/MiruLog/captures --archive-root D:/MiruLog/archive`
+
 2. `python analyzer.py --limit 30`
    - 未解析のキャプチャを取得し、`ANALYZER_BACKEND` に応じて Gemini またはローカル LLM に画像と文脈（ウィンドウ情報）を送信します。
    - `--limit` は「1回のバッチで処理する件数」です（指定しない場合はバックエンドによりデフォルトが異なります）。
@@ -92,11 +99,113 @@ Windows タスク スケジューラを使えば、observer をログオン時�
 
 トレイから `analyzer.py` を起動した場合は、未解析が空になるまで解析を回し切るモード（`--until-empty`）で動作し、状況（処理済み/残り/直近タスク）がステータス表示に反映されます。
 
+> 注意: 現状の `tray.py` は Python スクリプト（`observer.py` など）を起動/停止する仕組みです。配布用の `dist/mirulog-observer.exe` をトレイから操作する用途には対応していません。
+
 ### 手動起動
 
 ```
 python tray.py
 ```
+
+## observer を EXE 化する（PyInstaller）
+
+`observer` 機能だけを単体EXE化できます（Windows向け）。事前に `.venv` が必要です。
+
+1) PyInstaller をインストール
+
+`C:\Users\...\Miru-Log\.venv\Scripts\python.exe -m pip install pyinstaller`
+
+2) ビルド
+
+- コンソールあり（デバッグ向き）:
+
+`powershell -ExecutionPolicy Bypass -File scripts/build_observer.ps1`
+
+- コンソールなし（常駐向き）:
+
+`powershell -ExecutionPolicy Bypass -File scripts/build_observer.ps1 -NoConsole`
+
+出力は `dist/` 配下に生成されます（例: `dist/mirulog-observer.exe`）。
+
+### 配布するもの（observer のみ）
+
+- `dist/mirulog-observer.exe`
+- `dist/.env`（保存先/間隔などの設定）
+- （任意）ショートカット `.lnk`
+
+`scripts/build_observer.ps1` はビルド時に `dist/` を作り直しますが、`dist/.env` と `dist/*.lnk` は保持（無い場合は `scripts/observer.env` から `dist/.env` を生成）するようになっています。
+
+### 配布用 `.env` のテンプレ
+
+- `scripts/observer.env` は observer 配布向けの最小構成テンプレです。
+- 既定で PC 名ごとに保存先を分けるため、`%COMPUTERNAME%` を使っています。
+
+例:
+
+- `CAPTURE_ROOT=data/captures/%COMPUTERNAME%`
+- `ARCHIVE_ROOT=data/archive/%COMPUTERNAME%`
+
+これにより、複数 PC で同じ共有フォルダ配下へ保存しても、衝突しにくくなります（SQLite の DB を 1つに共有して同時書き込みするのは避けてください）。
+
+### 複数PC運用（キャプチャのみ）
+
+複数 PC で行うのが **キャプチャ（observer）だけ** の場合は、以下の運用が安全です。
+
+- 各PC: `dist/mirulog-observer.exe` を常駐させ、`CAPTURE_ROOT` / `ARCHIVE_ROOT` を `%COMPUTERNAME%` 付きで PC 別に分離
+   - 例: `ARCHIVE_ROOT=\\server\share\mirulog\archive\%COMPUTERNAME%`
+   - これにより、DB は `.../<PC名>/mirulog.db` となり、PC 間で SQLite を共有しません
+- 解析/日報生成: 1台のPCでまとめて実行（同じDBに複数端末から同時に書き込まない）
+
+**解析をまとめて行う方法（例）**
+
+- 最も簡単: `ARCHIVE_ROOT` を切り替えて PC ごとに `analyzer.py` を実行
+   - PowerShell 例:
+      - `$env:ARCHIVE_ROOT='\\server\share\mirulog\archive\DESKTOP-AAAAAAA' ; python analyzer.py --until-empty`
+      - `$env:ARCHIVE_ROOT='\\server\share\mirulog\archive\DESKTOP-BBBBBBB' ; python analyzer.py --until-empty`
+- PC名フォルダを自動で走査して順番に回す: `scripts/run_analyzer_all_pcs.ps1`
+   - 例:
+      - 解析実行: `powershell -ExecutionPolicy Bypass -File scripts/run_analyzer_all_pcs.ps1 -ArchiveRootParent "\\server\share\mirulog\archive" -Mode analyze -Limit 50 -UntilEmpty true`
+      - 未解析件数の一覧表示のみ（解析は実行しない）: `powershell -ExecutionPolicy Bypass -File scripts/run_analyzer_all_pcs.ps1 -ArchiveRootParent "\\server\share\mirulog\archive" -Mode list`
+
+> 重要: 集約PCで別PCのスクリーンショット画像を解析するには、集約PCから画像ファイルのパスにアクセスできる必要があります。
+> そのため、複数PC運用では `CAPTURE_ROOT` / `ARCHIVE_ROOT` を共有ストレージ上（UNCパスなど）に置くのが安全です。
+>
+> `run_analyzer_all_pcs.ps1` で画像パスも合わせて切り替える場合は `-CaptureRootParent` を使えます（`<captures>/<PC名>` を想定）。
+> 例: `powershell -ExecutionPolicy Bypass -File scripts/run_analyzer_all_pcs.ps1 -ArchiveRootParent "\\server\share\mirulog\archive" -CaptureRootParent "\\server\share\mirulog\captures" -Mode analyze -Limit 50 -UntilEmpty true`
+- `.env` を PC ごとに分ける場合は `MIRULOG_DOTENV` で切り替え可能
+   - 例: `$env:MIRULOG_DOTENV='D:\MiruLog\envs\desktop-a.env' ; python analyzer.py --until-empty`
+
+> 注意: 同一 `mirulog.db` を複数PCで同時に更新する運用（DB共有）は避けてください。キャプチャのみであっても、DB が共有される設定だとロック/破損の原因になります。
+
+**日報（md）を全PCぶん1本にまとめる（デフォルト）**
+
+集約PCでは `.env`（または実行時の環境変数）で `ARCHIVE_ROOT` を「PC名フォルダの親」に向けて `summarizer.py` / `notifier.py` を実行します。
+
+- 例:
+   - `$env:ARCHIVE_ROOT='\\server\share\mirulog\archive' ; python summarizer.py --date 2025-12-31`
+   - `$env:ARCHIVE_ROOT='\\server\share\mirulog\archive' ; python notifier.py --date 2025-12-31`
+
+このとき `ARCHIVE_ROOT` 直下の `*/mirulog.db` を自動検出し、全PCぶんの解析結果を時系列に統合した **1本の md** を出力します。
+
+#### キャプチャされない（"session is locked" が出る）場合
+
+`dist/logs/observer.log` に `Skipping capture: session is locked` が出続ける場合は、Windows の環境によってロック判定が誤検知することがあります。
+
+回避策として、配布用 `.env` に以下を追加するとロック判定を無効化できます（ロック画面でも動いてしまう点は理解した上で使用してください）。
+
+- `MIRULOG_DISABLE_LOCK_CHECK=true`
+
+### ショートカット（作業フォルダー=dist）を作る
+
+`dist/.env` を確実に使うには、ショートカットの「作業フォルダー（Start in）」が `dist` になっているのが重要です。
+
+- 生成（デフォルトはデスクトップに `MiruLog Observer.lnk`）:
+
+`powershell -ExecutionPolicy Bypass -File scripts/create_observer_shortcut.ps1`
+
+### EXE 実行時に保存先を変える
+
+`dist/mirulog-observer.exe --capture-root D:/MiruLog/captures --archive-root D:/MiruLog/archive`
 
 ### タスクスケジューラでログオン時に自動起動
 

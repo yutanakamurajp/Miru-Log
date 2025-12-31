@@ -75,10 +75,10 @@ def render_japanese_report(summary: DailySummary) -> str:
                 lines.append(f"  - {u}")
         lines.append("")
 
-    lines.append("## タスク別累計時間")
+    lines.append("## タスク別累計（上位＋その他）")
     lines.append("| タスク | 合計時間 (分) | 割合 |")
     lines.append("| --- | ---: | ---: |")
-    totals = _aggregate_task_totals(summary)
+    totals = _aggregate_task_totals(summary, top_n=8)
     total_minutes = summary.total_active_minutes or 1.0
     for task, minutes in totals:
         ratio = minutes / total_minutes * 100.0
@@ -86,30 +86,6 @@ def render_japanese_report(summary: DailySummary) -> str:
     if not totals:
         lines.append("| (データ無し) | 0 | 0% |")
     lines.append("")
-
-    lines.append("## タイムテーブル")
-    lines.append("| 時間帯 | タスク | 主要アクション | 所要時間 |")
-    lines.append("| --- | --- | --- | ---: |")
-    for segment in summary.segments:
-        highlights = "<br>".join(segment.highlights) if segment.highlights else "-"
-        lines.append(
-            f"| {segment.period_label} | {segment.dominant_task} | {highlights} | {segment.duration_minutes:.0f}m |")
-    if not summary.segments:
-        lines.append("| (データ無し) | - | - | 0m |")
-    lines.append("")
-
-    lines.append("## 詳細メモ")
-    if summary.segments:
-        for segment in summary.segments:
-            lines.append(f"### {segment.period_label} — {segment.dominant_task}")
-            for highlight in segment.highlights:
-                lines.append(f"- {highlight}")
-            if not segment.highlights:
-                lines.append("- 活動記録なし")
-            lines.append("")
-    else:
-        lines.append("- 活動記録がありません")
-        lines.append("")
 
     if summary.blocking_issues:
         lines.append("## ブロッカー")
@@ -124,15 +100,20 @@ def render_japanese_report(summary: DailySummary) -> str:
         lines.append("")
 
     lines.append("---")
-    lines.append("Generated automatically by Miru-Log")
     return "\n".join(lines)
 
-
-def _aggregate_task_totals(summary: DailySummary) -> list[tuple[str, float]]:
+def _aggregate_task_totals(summary: DailySummary, *, top_n: int = 8) -> list[tuple[str, float]]:
     totals: defaultdict[str, float] = defaultdict(float)
     for segment in summary.segments:
         totals[segment.dominant_task] += segment.duration_minutes
-    return sorted(totals.items(), key=lambda item: item[1], reverse=True)
+    sorted_totals = sorted(totals.items(), key=lambda item: item[1], reverse=True)
+    if top_n <= 0 or len(sorted_totals) <= top_n:
+        return sorted_totals
+    head = sorted_totals[:top_n]
+    other_minutes = sum(m for _, m in sorted_totals[top_n:])
+    if other_minutes > 0:
+        head.append(("その他", other_minutes))
+    return head
 
 
 def _maybe_generate_infographic(summary: DailySummary, image_path: Path, settings, logger) -> None:

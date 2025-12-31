@@ -4,6 +4,7 @@ import argparse
 import json
 import re
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import List
 
 from mirulog.config import get_settings
@@ -21,8 +22,7 @@ def main() -> None:
     logger = init_logger("summarizer", settings.logging.directory, settings.logging.level)
     target_date = args.date or datetime.now(tz=settings.timezone).strftime("%Y-%m-%d")
 
-    repo = ObservationRepository(settings.capture.archive_root / "mirulog.db")
-    rows = repo.daily_analysis(target_date)
+    rows = _load_daily_rows(settings.capture.archive_root, target_date, logger)
     if not rows:
         logger.warning("No analyzed captures for %s", target_date)
         summary = DailySummary(
@@ -36,15 +36,63 @@ def main() -> None:
         )
     else:
         summary = build_daily_summary(rows, target_date, settings.capture.interval_seconds)
+
     summary_dir = settings.output.summary_dir
     summary_dir.mkdir(parents=True, exist_ok=True)
-    markdown_path = summary_dir / f"daily-report-{target_date}.md"
-    json_path = summary_dir / f"daily-report-{target_date}.json"
+
+    # Use compact date for filenames: daily-report-YYYYMMDD.*
+    compact_date = target_date.replace("-", "")
+    markdown_path = summary_dir / f"daily-report-{compact_date}.md"
+    json_path = summary_dir / f"daily-report-{compact_date}.json"
+
     summary.markdown_path = markdown_path
 
     markdown_path.write_text(render_markdown(summary), encoding="utf-8")
     json_path.write_text(json.dumps(to_dict(summary), ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info("Daily summary saved to %s", markdown_path)
+
+
+def _load_daily_rows(archive_root: Path, target_date: str, logger):
+    """Load analyzed rows for a date.
+
+    - If archive_root/mirulog.db exists: single DB mode.
+    - Else: multi-PC mode (scan immediate subfolders for */mirulog.db).
+
+    Returns rows compatible with build_daily_summary().
+    In multi-PC mode, each row is prefixed with pc_name.
+    """
+
+    pc_dbs: list[tuple[str, Path]] = []
+    if archive_root.exists():
+        for child in archive_root.iterdir():
+            if not child.is_dir():
+                continue
+            db_path = child / "mirulog.db"
+            if db_path.exists():
+                pc_dbs.append((child.name, db_path))
+
+    # Prefer multi-PC aggregation when any PC DBs exist under archive_root.
+    # This supports setups where an older single-DB (archive_root/mirulog.db)
+    # still exists alongside the new per-PC folders.
+    if pc_dbs:
+        logger.info("Multi-PC archive detected under %s (pcs=%s)", archive_root, len(pc_dbs))
+        all_rows = []
+        for pc_name, db_path in sorted(pc_dbs, key=lambda x: x[0].lower()):
+            repo = ObservationRepository(db_path)
+            rows = repo.daily_analysis(target_date)
+            for row in rows:
+                all_rows.append((pc_name, *row))
+
+        # Sort by captured_at (ISO) to make timeline coherent across PCs.
+        all_rows.sort(key=lambda r: r[2])
+        return all_rows
+
+    single_db = archive_root / "mirulog.db"
+    if single_db.exists():
+        repo = ObservationRepository(single_db)
+        return repo.daily_analysis(target_date)
+
+    return []
 
 
 def build_daily_summary(rows, date_str: str, interval_seconds: int) -> DailySummary:
@@ -57,11 +105,20 @@ def build_daily_summary(rows, date_str: str, interval_seconds: int) -> DailySumm
     observed_repos: set[str] = set()
     observed_urls: set[str] = set()
 
-    for capture_id, ts_str, window_title, app, description, task, confidence, tags_str, raw_response in rows:
+    for row in rows:
+        if len(row) == 9:
+            pc_name = None
+            capture_id, ts_str, window_title, app, description, task, confidence, tags_str, raw_response = row
+        elif len(row) == 10:
+            pc_name, capture_id, ts_str, window_title, app, description, task, confidence, tags_str, raw_response = row
+        else:
+            raise ValueError(f"Unexpected row shape: {len(row)}")
+
         ts = datetime.fromisoformat(ts_str)
-        task = task or "Unclassified"
+        task = _normalize_task_label(task or "Unclassified")
         tags = [t.strip() for t in (tags_str or "").split(",") if t.strip()]
-        highlight = f"{ts.strftime('%H:%M')} {description}"
+        highlight_prefix = f"[{pc_name}] " if pc_name else ""
+        highlight = f"{highlight_prefix}{ts.strftime('%H:%M')} {description}"
 
         payload = _best_effort_parse_json(raw_response or "")
         observed_files.update(_coerce_str_list(payload.get("observed_files")))
@@ -76,10 +133,11 @@ def build_daily_summary(rows, date_str: str, interval_seconds: int) -> DailySumm
             observed_repos.add(repo_from_title)
         observed_urls.update(_extract_urls(description or ""))
 
+        blocking_entry = f"{highlight_prefix}{description}" if pc_name else description
         if any(keyword in description.lower() for keyword in ("error", "fail", "exception")):
-            blocking.append(description)
+            blocking.append(blocking_entry)
         if any(tag.lower() in {"todo", "follow-up"} for tag in tags):
-            followups.append(description)
+            followups.append(blocking_entry)
 
         if current and current["task"] == task:
             current["count"] += 1
@@ -152,7 +210,7 @@ def render_markdown(summary: DailySummary) -> str:
     lines.append("\n## タスク別累計時間")
     lines.append("| タスク | 合計時間 (分) | 割合 |")
     lines.append("| --- | ---: | ---: |")
-    totals = _aggregate_task_totals(summary)
+    totals = _aggregate_task_totals(summary, top_n=8)
     total_minutes = summary.total_active_minutes or 1.0
     for task, minutes in totals:
         ratio = minutes / total_minutes * 100.0
@@ -171,16 +229,6 @@ def render_markdown(summary: DailySummary) -> str:
     if not summary.segments:
         lines.append("| (データ無し) | - | 0m | - |")
 
-    lines.append("\n## 詳細ログ\n")
-    if summary.segments:
-        for segment in summary.segments:
-            for highlight in segment.highlights:
-                lines.append(f"- {segment.dominant_task}: {highlight}")
-            if not segment.highlights:
-                lines.append(f"- {segment.dominant_task}: 活動記録なし")
-    else:
-        lines.append("- 活動記録がありません")
-
     if summary.blocking_issues:
         lines.append("\n## ブロッカー\n")
         for issue in summary.blocking_issues:
@@ -193,11 +241,18 @@ def render_markdown(summary: DailySummary) -> str:
 
     return "\n".join(lines)
 
-def _aggregate_task_totals(summary: DailySummary) -> list[tuple[str, float]]:
+def _aggregate_task_totals(summary: DailySummary, *, top_n: int = 8) -> list[tuple[str, float]]:
     totals: dict[str, float] = {}
     for segment in summary.segments:
         totals[segment.dominant_task] = totals.get(segment.dominant_task, 0.0) + segment.duration_minutes
-    return sorted(totals.items(), key=lambda item: item[1], reverse=True)
+    sorted_totals = sorted(totals.items(), key=lambda item: item[1], reverse=True)
+    if top_n <= 0 or len(sorted_totals) <= top_n:
+        return sorted_totals
+    head = sorted_totals[:top_n]
+    other_minutes = sum(m for _, m in sorted_totals[top_n:])
+    if other_minutes > 0:
+        head.append(("その他", other_minutes))
+    return head
 
 def to_dict(summary: DailySummary) -> dict:
     return {
@@ -296,6 +351,50 @@ def _filter_workspace_candidate(candidate: str) -> str | None:
     if len(candidate) > 60:
         return None
     return candidate
+
+
+def _normalize_task_label(task: str) -> str:
+    """Coarsen task labels so the report is easier to read.
+
+    The analyzer's primary_task can be too fine-grained. We map common keywords
+    into coarse buckets.
+    """
+
+    raw = (task or "").strip()
+    if not raw:
+        return "Unclassified"
+
+    t = raw.lower()
+
+    # Communication / coordination
+    if any(k in t for k in ["メール", "mail", "slack", "teams", "チャット", "連絡", "返信", "対応"]):
+        return "連絡/調整"
+
+    # Meetings
+    if any(k in t for k in ["mtg", "meeting", "会議", "打合せ", "打ち合わせ", "面談", "1on1", "レビュー会"]):
+        return "ミーティング"
+
+    # Coding / development
+    if any(k in t for k in ["実装", "コーディング", "コード", "開発", "修正", "refactor", "リファクタ", "プログラム"]):
+        return "開発(コード)"
+
+    # Debugging / troubleshooting
+    if any(k in t for k in ["debug", "デバッグ", "不具合", "バグ", "エラー", "障害", "原因", "調査(不具合)"]):
+        return "デバッグ/不具合対応"
+
+    # Research
+    if any(k in t for k in ["調査", "リサーチ", "検討", "比較", "方針", "設計", "仕様", "理解"]):
+        return "調査/検討"
+
+    # Docs / writing
+    if any(k in t for k in ["ドキュメント", "資料", "readme", "md", "markdown", "メモ", "日報", "報告", "文章"]):
+        return "ドキュメント/記録"
+
+    # Reading
+    if any(k in t for k in ["閲覧", "読む", "読書", "視聴", "学習", "チュートリアル"]):
+        return "閲覧/学習"
+
+    return raw
 
 
 if __name__ == "__main__":

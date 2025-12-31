@@ -56,8 +56,22 @@ def is_session_locked() -> bool:
     if os.name != "nt":
         return False
 
+    # Emergency escape hatch: allow disabling lock detection when it misbehaves
+    # on certain environments (e.g., false positives from WTS APIs).
+    if os.getenv("MIRULOG_DISABLE_LOCK_CHECK", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return False
+
     locked = _wts_is_session_locked()
     if locked is not None:
+        # Some environments report false positives via WTS. If WTS says locked
+        # but the input desktop is available, treat as unlocked.
+        if locked:
+            user32 = ctypes.windll.user32
+            DESKTOP_SWITCHDESKTOP = 0x0100
+            hdesktop = user32.OpenInputDesktop(0, False, DESKTOP_SWITCHDESKTOP)
+            if hdesktop != 0:
+                user32.CloseDesktop(hdesktop)
+                return False
         return locked
 
     # Fallback: heuristic based on input desktop availability.
@@ -106,15 +120,23 @@ def _wts_is_session_locked() -> bool | None:
         wtsapi32.WTSFreeMemory.argtypes = [ctypes.c_void_p]
         wtsapi32.WTSFreeMemory.restype = None
 
-        kernel32.GetCurrentProcessId.argtypes = []
-        kernel32.GetCurrentProcessId.restype = wintypes.DWORD
-        kernel32.ProcessIdToSessionId.argtypes = [wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
-        kernel32.ProcessIdToSessionId.restype = wintypes.BOOL
+        # Prefer the active console session (interactive user) when available.
+        # This avoids false positives when the process session differs.
+        kernel32.WTSGetActiveConsoleSessionId.argtypes = []
+        kernel32.WTSGetActiveConsoleSessionId.restype = wintypes.DWORD
 
-        session_id = wintypes.DWORD(0)
-        pid = kernel32.GetCurrentProcessId()
-        if not kernel32.ProcessIdToSessionId(pid, ctypes.byref(session_id)):
-            return None
+        session_id = wintypes.DWORD(kernel32.WTSGetActiveConsoleSessionId())
+        # 0xFFFFFFFF means no active console session.
+        if int(session_id.value) == 0xFFFFFFFF:
+            kernel32.GetCurrentProcessId.argtypes = []
+            kernel32.GetCurrentProcessId.restype = wintypes.DWORD
+            kernel32.ProcessIdToSessionId.argtypes = [wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+            kernel32.ProcessIdToSessionId.restype = wintypes.BOOL
+
+            session_id = wintypes.DWORD(0)
+            pid = kernel32.GetCurrentProcessId()
+            if not kernel32.ProcessIdToSessionId(pid, ctypes.byref(session_id)):
+                return None
 
         buffer = ctypes.c_void_p()
         bytes_returned = wintypes.DWORD(0)

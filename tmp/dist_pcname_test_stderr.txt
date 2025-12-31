@@ -1,0 +1,1 @@
+2025-12-31 15:52:57,602 [INFO] observer: Observer started: interval=60s idle_threshold=5m

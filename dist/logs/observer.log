@@ -1,0 +1,3 @@
+2025-12-31 16:14:07,850 [INFO] observer: Observer started: interval=60s idle_threshold=5m
+2025-12-31 16:14:07,935 [INFO] observer: Captured screenshot capture-20251231-161407.png (dist - エクスプローラー)
+2025-12-31 16:14:42,858 [INFO] observer: Received signal 2 - shutting down observer

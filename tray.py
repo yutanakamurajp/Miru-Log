@@ -6,6 +6,7 @@ import subprocess
 import sys
 import threading
 import time
+import random
 from datetime import datetime
 from dataclasses import dataclass
 from json import JSONDecodeError
@@ -75,6 +76,16 @@ def _write_tray_state_atomic(path: Path, state: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
     tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    # On Windows (esp. under Dropbox sync), the target file may be temporarily locked.
+    # Retry a few times rather than crashing background threads.
+    for attempt in range(8):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            # Small jitter helps avoid sync races.
+            time.sleep(0.05 * (attempt + 1) + random.random() * 0.02)
+    # Last attempt (raise if still failing)
     os.replace(tmp, path)
 
 
@@ -88,6 +99,7 @@ class TrayController:
         self.analyzer_backend = self._load_analyzer_backend()
         self.processes: dict[str, subprocess.Popen] = {}
         self.lock = threading.Lock()
+        self._stop_event = threading.Event()
         self.programs = [
             ProgramSpec("observer.py", "Observer", "daemon"),
             ProgramSpec("analyzer.py", "Analyzer", "oneshot"),
@@ -102,7 +114,18 @@ class TrayController:
         )
 
     def run(self) -> None:
-        self.icon.run()
+        # run() blocks the main thread with the Win32 message loop, and Ctrl+C can surface as
+        # an exception from a ctypes callback. Detaching keeps the UI responsive while allowing
+        # graceful shutdown on KeyboardInterrupt.
+        self.icon.run_detached()
+        try:
+            self._stop_event.wait()
+        except KeyboardInterrupt:
+            self.logger.info("KeyboardInterrupt received; stopping tray icon")
+            try:
+                self.icon.stop()
+            finally:
+                self._stop_event.set()
 
     def _build_menu(self) -> pystray.Menu:
         items = []
@@ -265,6 +288,7 @@ class TrayController:
             self.logger.warning("Failed to open %s: %s", path, exc)
 
     def _quit(self, icon: Any, _: Any) -> None:
+        self._stop_event.set()
         icon.stop()
 
     def _refresh_menu(self) -> None:
@@ -382,7 +406,11 @@ class TrayController:
                 nested = dict(scripts.get(script, {})) if isinstance(scripts.get(script), dict) else {}
                 nested.update(updates)
                 scripts[script] = nested
-            _write_tray_state_atomic(self._state_path, self.state)
+            try:
+                _write_tray_state_atomic(self._state_path, self.state)
+            except PermissionError as exc:
+                # Best-effort: avoid crashing the tray thread if the file is locked.
+                self.logger.warning("Failed to update tray state (file locked): %s", exc)
 
     def _load_analyzer_backend(self) -> str:
         # Persisted selection wins. Fallback to env, then default.

@@ -8,7 +8,6 @@ from json import JSONDecodeError
 from typing import Any
 from datetime import datetime
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 
 from mirulog.capture import CaptureManager
 from mirulog.config import get_settings
@@ -84,8 +83,7 @@ def main() -> None:
     )
 
     try:
-        repo = ObservationRepository(settings.capture.archive_root / "mirulog.db")
-        capture_manager = CaptureManager(settings.capture.capture_root, settings.capture.archive_root, settings.timezone, logger)
+        targets = _detect_analysis_targets(settings.capture.archive_root)
 
         if settings.analyzer.backend == "local":
             analyzer = LocalLLMAnalyzer(settings.local_llm, logger)
@@ -100,7 +98,13 @@ def main() -> None:
             batch_size = max(1, int(args.limit))
         total_processed = 0
 
-        def write_progress(*, last_task: str | None = None, last_capture_id: int | None = None) -> None:
+        def write_progress(
+            *,
+            repo: ObservationRepository,
+            pc: str | None,
+            last_task: str | None = None,
+            last_capture_id: int | None = None,
+        ) -> None:
             if not tray_state_file:
                 return
             try:
@@ -110,60 +114,179 @@ def main() -> None:
             progress = {
                 "processed": total_processed,
                 "pending": pending,
+                "pc": pc,
                 "last_task": last_task,
                 "last_capture_id": last_capture_id,
                 "updated_at": datetime.now().isoformat(),
             }
             _update_tray_state(tray_state_file, "analyzer.py", {"progress": progress})
 
-        while True:
-            pending = repo.pending_captures(limit=batch_size)
-            if not pending:
-                if total_processed == 0:
-                    logger.info("No pending captures to analyze")
-                else:
-                    logger.info("No pending captures remain (processed=%s)", total_processed)
-                return
+        # Iterate targets sequentially to avoid SQLite concurrency issues.
+        for pc_name, per_pc_archive_root in targets:
+            repo = ObservationRepository(per_pc_archive_root / "mirulog.db")
+            per_pc_capture_root = _guess_capture_root_for_pc(
+                global_capture_root=settings.capture.capture_root,
+                per_pc_archive_root=per_pc_archive_root,
+                pc_name=pc_name,
+            )
+            capture_manager = CaptureManager(per_pc_capture_root, per_pc_archive_root, settings.timezone, logger)
 
-            logger.info("Analyzing %s pending captures", len(pending))
-            write_progress()
-            for index, record in enumerate(pending, start=1):
-                try:
-                    result = analyzer.analyze(record)
-                    repo.save_analysis(result)
-                    capture_manager.archive(record, delete_original=settings.capture.delete_after_analysis)
-                    total_processed += 1
-                    write_progress(last_task=result.primary_task, last_capture_id=record.id)
-                    logger.info(
-                        "Capture %s/%s analyzed (id=%s) -> %s",
-                        index,
-                        len(pending),
-                        record.id,
-                        result.primary_task,
-                    )
-                except Exception as exc:
-                    message = str(exc)
-                    is_rate_limited = "429" in message or "Quota exceeded" in message or "rate limit" in message.lower()
-                    if is_rate_limited:
-                        logger.warning(
-                            "Rate limited while analyzing capture %s/%s (id=%s). Stopping this run.",
+            logger.info("Analyzing target: pc=%s archive_root=%s capture_root=%s", pc_name or "(single)", per_pc_archive_root, per_pc_capture_root)
+
+            while True:
+                pending = repo.pending_captures(limit=batch_size)
+                if not pending:
+                    logger.info("No pending captures for pc=%s", pc_name or "(single)")
+                    break
+
+                logger.info("Analyzing %s pending captures (pc=%s)", len(pending), pc_name or "(single)")
+                write_progress(repo=repo, pc=pc_name)
+
+                for index, record in enumerate(pending, start=1):
+                    try:
+                        record = _resolve_record_image_path(record, per_pc_capture_root, per_pc_archive_root)
+                        result = analyzer.analyze(record)
+                        repo.save_analysis(result)
+                        capture_manager.archive(record, delete_original=settings.capture.delete_after_analysis)
+                        total_processed += 1
+                        write_progress(repo=repo, pc=pc_name, last_task=result.primary_task, last_capture_id=record.id)
+                        logger.info(
+                            "Capture %s/%s analyzed (pc=%s id=%s) -> %s",
                             index,
                             len(pending),
+                            pc_name or "(single)",
                             record.id,
+                            result.primary_task,
                         )
-                        logger.exception("Last error: %s", exc)
-                        _update_tray_state(tray_state_file, "analyzer.py", {"last_error": str(exc)})
-                        return
-                    logger.exception("Failed to analyze capture %s/%s (id=%s): %s", index, len(pending), record.id, exc)
-                    _update_tray_state(tray_state_file, "analyzer.py", {"last_error": str(exc)})
+                    except Exception as exc:
+                        message = str(exc)
+                        is_rate_limited = "429" in message or "Quota exceeded" in message or "rate limit" in message.lower()
+                        if is_rate_limited:
+                            logger.warning(
+                                "Rate limited while analyzing capture %s/%s (pc=%s id=%s). Stopping this run.",
+                                index,
+                                len(pending),
+                                pc_name or "(single)",
+                                record.id,
+                            )
+                            logger.exception("Last error: %s", exc)
+                            _update_tray_state(tray_state_file, "analyzer.py", {"last_error": str(exc), "pc": pc_name})
+                            return
+                        logger.exception(
+                            "Failed to analyze capture %s/%s (pc=%s id=%s): %s",
+                            index,
+                            len(pending),
+                            pc_name or "(single)",
+                            record.id,
+                            exc,
+                        )
+                        _update_tray_state(tray_state_file, "analyzer.py", {"last_error": str(exc), "pc": pc_name})
 
-            if not args.until_empty:
-                return
+                if not args.until_empty:
+                    break
+
+        if total_processed == 0:
+            logger.info("No pending captures to analyze")
+        else:
+            logger.info("Analysis run finished (processed=%s)", total_processed)
+        return
 
         _update_tray_state(tray_state_file, "analyzer", {"status": "finished", "exit_code": 0})
     except Exception as e:
         _update_tray_state(tray_state_file, "analyzer", {"status": "error", "error": repr(e), "exit_code": 1})
         raise
+
+
+def _detect_analysis_targets(archive_root: Path) -> list[tuple[str | None, Path]]:
+    """Return [(pc_name, per_pc_archive_root), ...] in processing order.
+
+    If archive_root contains subfolders with mirulog.db, treat as multi-PC mode.
+    Otherwise, single target (None, archive_root).
+    """
+
+    pc_dirs: list[tuple[str, Path]] = []
+    try:
+        if archive_root.exists():
+            for child in archive_root.iterdir():
+                if not child.is_dir():
+                    continue
+                if (child / "mirulog.db").exists():
+                    pc_dirs.append((child.name, child))
+    except Exception:
+        pc_dirs = []
+
+    if pc_dirs:
+        return sorted(pc_dirs, key=lambda item: item[0].lower())
+    return [(None, archive_root)]
+
+
+def _guess_capture_root_for_pc(
+    *,
+    global_capture_root: Path,
+    per_pc_archive_root: Path,
+    pc_name: str | None,
+) -> Path:
+    """Best-effort mapping from per-PC archive folder to capture folder.
+
+    For centralized analysis to work, the analyzer must be able to read the image files.
+    Prefer shared paths where the aggregator machine can access captures.
+    """
+
+    if not pc_name:
+        return global_capture_root
+
+    # Explicit override: parent folder that contains per-PC capture folders.
+    capture_parent = (os.getenv("MIRULOG_CAPTURE_ROOT_PARENT") or "").strip()
+    if capture_parent:
+        return (Path(os.path.expandvars(capture_parent)) / pc_name).resolve()
+
+    # If CAPTURE_ROOT is a parent folder, use CAPTURE_ROOT/<PC> when it exists.
+    candidate = (global_capture_root / pc_name)
+    if candidate.exists():
+        return candidate
+
+    # Common default layout: <root>/archive/<PC> and <root>/captures/<PC>
+    sibling = per_pc_archive_root.parent / "captures" / pc_name
+    if sibling.exists():
+        return sibling
+
+    # Fallback: keep global capture root.
+    return global_capture_root
+
+
+def _resolve_record_image_path(record, capture_root: Path, archive_root: Path):
+    """If record.image_path does not exist on this machine, try to reconstruct.
+
+    This is needed for multi-PC setups where the DB might store an absolute path
+    from another machine.
+    """
+
+    try:
+        path = Path(record.image_path)
+    except Exception:
+        return record
+
+    if path.exists():
+        return record
+
+    name = path.name
+    date_folder = record.captured_at.strftime("%Y-%m-%d")
+
+    candidates = [
+        capture_root / date_folder / name,
+        archive_root / date_folder / name,
+        capture_root / name,
+        archive_root / name,
+    ]
+    for cand in candidates:
+        try:
+            if cand.exists():
+                record.image_path = cand
+                return record
+        except Exception:
+            continue
+
+    return record
 
 
 if __name__ == "__main__":

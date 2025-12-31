@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -78,8 +79,9 @@ class AppSettings:
 
 @lru_cache(maxsize=1)
 def get_settings() -> AppSettings:
-    dotenv_path = Path(__file__).resolve().parents[1] / ".env"
-    load_dotenv(dotenv_path=dotenv_path, override=False, encoding="utf-8-sig")
+    dotenv_path = _find_dotenv_path()
+    if dotenv_path is not None:
+        load_dotenv(dotenv_path=dotenv_path, override=False, encoding="utf-8-sig")
 
     tz_name = os.getenv("TIMEZONE", "Asia/Tokyo")
     timezone = ZoneInfo(tz_name)
@@ -87,8 +89,8 @@ def get_settings() -> AppSettings:
     capture = CaptureSettings(
         interval_seconds=int(os.getenv("CAPTURE_INTERVAL_SECONDS", "60")),
         idle_threshold_minutes=int(os.getenv("IDLE_THRESHOLD_MINUTES", "5")),
-        capture_root=Path(os.getenv("CAPTURE_ROOT", "data/captures")).resolve(),
-        archive_root=Path(os.getenv("ARCHIVE_ROOT", "data/archive")).resolve(),
+        capture_root=Path(_expand_env_vars(os.getenv("CAPTURE_ROOT", "data/captures"))).resolve(),
+        archive_root=Path(_expand_env_vars(os.getenv("ARCHIVE_ROOT", "data/archive"))).resolve(),
         delete_after_analysis=_as_bool(os.getenv("DELETE_CAPTURE_AFTER_ANALYSIS", "true")),
     )
 
@@ -127,13 +129,13 @@ def get_settings() -> AppSettings:
     )
 
     logging_settings = LoggingSettings(
-        directory=Path(os.getenv("LOG_DIR", "logs")).resolve(),
+        directory=Path(_expand_env_vars(os.getenv("LOG_DIR", "logs"))).resolve(),
         level=os.getenv("LOG_LEVEL", "INFO").upper(),
     )
 
     output_settings = OutputSettings(
-        summary_dir=Path(os.getenv("SUMMARY_OUTPUT_DIR", "output")).resolve(),
-        export_dir=Path(os.getenv("REPORT_EXPORT_DIR", "reports")).resolve(),
+        summary_dir=Path(_expand_env_vars(os.getenv("SUMMARY_OUTPUT_DIR", "output"))).resolve(),
+        export_dir=Path(_expand_env_vars(os.getenv("REPORT_EXPORT_DIR", "reports"))).resolve(),
     )
 
     return AppSettings(
@@ -161,3 +163,44 @@ def _as_bool(raw: str | None, default: bool | None = None) -> bool:
             return False
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _expand_env_vars(value: str) -> str:
+    """Expand environment variables inside a string.
+
+    Supports patterns like:
+    - Windows: %COMPUTERNAME%
+    - POSIX: $HOME, ${HOME}
+    """
+
+    # Python's os.path.expandvars supports %VAR% on Windows and $VAR/${VAR}.
+    return os.path.expandvars(value)
+
+
+def _find_dotenv_path() -> Path | None:
+    """Find a suitable .env path.
+
+    Priority:
+    1) MIRULOG_DOTENV (explicit)
+    2) Current working directory
+    3) Executable directory (PyInstaller / frozen)
+    4) Repo root (relative to this file)
+    """
+
+    explicit = (os.getenv("MIRULOG_DOTENV") or "").strip()
+    if explicit:
+        path = Path(explicit)
+        return path if path.exists() else None
+
+    candidates: list[Path] = [Path.cwd() / ".env"]
+
+    if getattr(sys, "frozen", False):
+        # When bundled, __file__ points inside the temp extraction dir.
+        candidates.append(Path(sys.executable).resolve().parent / ".env")
+
+    candidates.append(Path(__file__).resolve().parents[1] / ".env")
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
