@@ -4,7 +4,7 @@ Miru-Log は Windows 上の操作画面を自動キャプチャし、Gemini で�
 
 ## リポジトリ構成
 
-```
+```text
 mirulog/            # 共有パッケージ（設定・ロギング・DB・外部 API との連携など）
 observer.py         # キャプチャエージェント（pyautogui + pynput）
 analyzer.py         # Gemini Vision 解析 + 画像ライフサイクル管理
@@ -15,8 +15,10 @@ requirements.txt    # Python 依存関係
 data/               # ランタイムデータ（Git 管理外）
 logs/               # 各エージェントのローテーションログ
 output/             # summarizer の生成物（Git 管理外）
-reports/            # 最終的な `YYYYMMDD_log.md` の配置先（Git 管理外）
+reports/            # 最終的な `YYYYMMDD_Miru-Log.md` の配置先（Git 管理外）
 ```
+
+> 注: notifier の出力ファイル名は `YYYYMMDD_Miru-Log.md` です。
 
 スクリーンショットのメタデータと Gemini の解析結果は `data/archive/mirulog.db`（SQLite）に保存され、画像ファイルは解析後に削除または日付別ディレクトリへ移動します。
 
@@ -82,12 +84,13 @@ Gemini free tier 等で `429 Quota exceeded` が出る場合、以下を `.env` 
 
 3. `python summarizer.py --date 2025-12-25`
    - 指定日の解析結果を集計し、タスク単位のセグメント化やブロッカー/フォローアップ抽出を行います。
-   - `output/` 以下に `daily-report-YYYY-MM-DD.md` と `daily-report-YYYY-MM-DD.json` を生成します。
+   - `output/` 以下に `daily-report-YYYYMMDD.md` と `daily-report-YYYYMMDD.json` を生成します。
    - 解析の生レスポンス（画面に写っていた情報）から、作業中のファイル名・リポジトリ名・URL などを推定して日報に含めます（読めない場合は空になります）。
 
 4. `python notifier.py --date 2025-12-25`
-   - 上記 Markdown を `REPORT_EXPORT_DIR` にコピーし、`YYYYMMDD_log.md` というファイル名で保存します。
-   - `.env` で `ENABLE_VISUALIZATION=true` にしている場合のみ、Nanobanana Pro で図解 PNG（`YYYYMMDD_log.png`）を出力します。
+   - 上記 Markdown を `REPORT_EXPORT_DIR` にコピーし、`YYYYMMDD_Miru-Log.md` というファイル名で保存します。
+   - `.env` で `ENABLE_VISUALIZATION=true` にしている場合のみ、Nanobanana Pro で図解 PNG（`YYYYMMDD_Miru-Log.png`）を出力します。
+   - Google カレンダー連携が有効な場合、ログが存在する時間帯を「Miru-Log」イベントとしてカレンダーへ登録します（連続している時間帯は結合してイベント数を減らします）。
 
 Windows タスク スケジューラを使えば、observer をログオン時に常駐させ、analyzer を定期実行、summarizer/notifier を深夜に実行するなどの完全自動化が可能です。
 
@@ -103,7 +106,7 @@ Windows タスク スケジューラを使えば、observer をログオン時�
 
 ### 手動起動
 
-```
+```text
 python tray.py
 ```
 
@@ -228,7 +231,34 @@ schtasks /Delete /TN "Miru-Log Tray" /F
 - `data/captures/` と `output/`, `reports/` は Git から除外済みです。解析後に画像を即削除するか、短期アーカイブするかは `.env` で切り替えられます。
 - セッションロック検知とアイドル閾値により、ユーザーが不在の間はキャプチャが停止し CPU / ストレージ消費を抑制します。
 - API キーはすべて `.env` から読み込み、リポジトリには含めません。
+- Google カレンダー連携の OAuth 認証情報（`credentials.json`）とトークン（`token.pickle`）は機密情報なので Git に含めません（.gitignore 済み）。
 - ログは `logs/observer.log` などファイルごとに分かれているため、トラブル発生時の追跡が容易です。
+
+## Google カレンダー連携（notifier）
+
+`notifier.py` は、日報エクスポートに加えて Google カレンダーへ「活動があった時間帯」を「Miru-Log」イベントとして登録できます。
+
+### 事前準備
+
+- Google Cloud Console で Google Calendar API を有効化
+- OAuth 同意画面を設定
+- OAuth 2.0 クライアント ID を作成（種類は **「デスクトップアプリ」**）
+- 認証情報 JSON をリポジトリ直下に配置: `credentials.json`
+
+> テストモードのまま使う場合は、OAuth 同意画面の「テストユーザー」に自分の Google アカウントを追加してください。
+
+### 設定（任意）
+
+- `GOOGLE_CALENDAR_ID`
+   - 未指定: `primary`
+   - 共有カレンダー等に出したい場合はカレンダー ID を指定
+
+### 実行
+
+`python notifier.py --date 2025-12-31`
+
+- 初回は OAuth 認証が走り、トークンが `token.pickle` に保存されます。
+- 環境によって `localhost` へのリダイレクトが使えない場合は、コンソール認証（コード貼り付け）にフォールバックします。
 
 ## トラブルシューティング
 

@@ -2,6 +2,11 @@
 .venv/
 __pycache__/
 *.pyc
+
+# Google OAuth (Calendar)
+credentials.json
+token.pickle
+token.json
 logs/*.log
 logs/rotations/
 data/captures/
@@ -19,3 +24,6 @@ reports/
 !data/captures/.gitkeep
 !data/archive/.gitkeep
 !reports/.gitkeep
+dist/
+build/
+data/
