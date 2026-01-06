@@ -49,6 +49,15 @@ def main() -> None:
     logger.info("Target date: %s", target_date)
     logger.info("=" * 60)
 
+    # Step 0: Cleanup old data
+    logger.info("Step 0: Running cleanup...")
+    try:
+        _run_cleanup(logger)
+        logger.info("Cleanup completed successfully")
+    except Exception as exc:
+        logger.exception("Cleanup failed: %s", exc)
+        logger.warning("Continuing pipeline despite cleanup failure")
+
     # Step 1: Analyze
     if not args.skip_analyze:
         logger.info("Step 1/3: Running analyzer...")
@@ -88,6 +97,26 @@ def main() -> None:
     logger.info("=" * 60)
     logger.info("Miru-Log Pipeline Completed Successfully")
     logger.info("=" * 60)
+
+
+def _run_cleanup(logger) -> None:
+    """Run database cleanup to remove old records."""
+    settings = get_settings()
+    db_path = Path("mirulog.db")
+
+    from mirulog.storage import ObservationRepository
+    repo = ObservationRepository(db_path)
+
+    retention_days = settings.capture.retention_days
+    logger.info(f"Cleaning up records older than {retention_days} days")
+
+    deleted_count = repo.cleanup_old_records(retention_days)
+    logger.info(f"Deleted {deleted_count} old capture records")
+
+    if deleted_count > 0:
+        logger.info("Running VACUUM to reclaim disk space")
+        repo.vacuum()
+        logger.info("VACUUM completed")
 
 
 def _run_analyzer(limit: int | None, until_empty: bool, logger) -> None:

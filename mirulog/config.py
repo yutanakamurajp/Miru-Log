@@ -17,6 +17,7 @@ class CaptureSettings:
     capture_root: Path
     archive_root: Path
     delete_after_analysis: bool
+    retention_days: int
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,7 @@ def get_settings() -> AppSettings:
         capture_root=Path(_expand_env_vars(os.getenv("CAPTURE_ROOT", "data/captures"))).resolve(),
         archive_root=Path(_expand_env_vars(os.getenv("ARCHIVE_ROOT", "data/archive"))).resolve(),
         delete_after_analysis=_as_bool(os.getenv("DELETE_CAPTURE_AFTER_ANALYSIS", "true")),
+        retention_days=int(os.getenv("DATA_RETENTION_DAYS", "7")),
     )
 
     analyzer_settings = AnalyzerSettings(
