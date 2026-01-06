@@ -3,6 +3,7 @@
 .claude/
 __pycache__/
 *.pyc
+*.db
 
 # Google OAuth (Calendar)
 credentials.json
