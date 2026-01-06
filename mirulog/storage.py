@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable, List
 
@@ -132,3 +132,64 @@ class ObservationRepository:
         """
         with sqlite3.connect(self.db_path) as conn:
             return conn.execute(query, (date_prefix,)).fetchall()
+
+    def cleanup_old_records(self, retention_days: int) -> int:
+        """Delete capture and analysis records older than retention_days.
+
+        Args:
+            retention_days: Number of days to keep records
+
+        Returns:
+            Number of deleted records
+        """
+        cutoff_date = (datetime.now() - timedelta(days=retention_days)).isoformat()
+
+        with sqlite3.connect(self.db_path) as conn:
+            # First, get the image paths of records to be deleted
+            rows = conn.execute(
+                """
+                SELECT image_path FROM captures
+                WHERE captured_at < ?
+                """,
+                (cutoff_date,)
+            ).fetchall()
+
+            # Delete analysis records first (due to foreign key constraint)
+            conn.execute(
+                """
+                DELETE FROM analysis
+                WHERE capture_id IN (
+                    SELECT id FROM captures WHERE captured_at < ?
+                )
+                """,
+                (cutoff_date,)
+            )
+
+            # Delete capture records
+            cursor = conn.execute(
+                """
+                DELETE FROM captures
+                WHERE captured_at < ?
+                """,
+                (cutoff_date,)
+            )
+            deleted_count = cursor.rowcount
+            conn.commit()
+
+            # Delete associated image files (if they still exist)
+            for (image_path_str,) in rows:
+                image_path = Path(image_path_str)
+                if image_path.exists():
+                    try:
+                        image_path.unlink()
+                    except Exception:
+                        # Ignore errors if file is already deleted or inaccessible
+                        pass
+
+            return deleted_count
+
+    def vacuum(self) -> None:
+        """Reclaim disk space after deletions by running VACUUM."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("VACUUM")
+            conn.commit()
