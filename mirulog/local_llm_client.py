@@ -80,7 +80,30 @@ class LocalLLMAnalyzer:
         description = payload.get("description") or text.strip()
         primary_task = payload.get("primary_task") or "Unclassified"
         tags = payload.get("tags") or []
-        confidence = float(payload.get("confidence", 0.6))
+        confidence_value = payload.get("confidence", 0.6)
+
+        # Ensure confidence is a float or fallback to default
+        if isinstance(confidence_value, dict):
+            self._logger.warning("Unexpected type for confidence: dict. Using default value 0.6.")
+            confidence = 0.6
+        else:
+            try:
+                confidence = float(confidence_value)
+            except (TypeError, ValueError):
+                self._logger.error(f"Failed to convert confidence to float: {confidence_value}. Using default value 0.6.")
+                confidence = 0.6
+
+        # Trim observed_files if it exceeds a reasonable length
+        if "observed_files" in payload and isinstance(payload["observed_files"], list):
+            max_files = 20  # Limit the number of files to include
+            if len(payload["observed_files"]) > max_files:
+                self._logger.warning(
+                    f"Observed files list too long ({len(payload['observed_files'])} items). Trimming to {max_files}."
+                )
+                payload["observed_files"] = payload["observed_files"][:max_files] + ["... (truncated)"]
+
+        # Debugging: Log the payload to investigate the structure
+        self._logger.debug(f"Payload content: {payload}")
 
         return AnalysisResult(
             capture_id=record.id or -1,
@@ -219,7 +242,10 @@ class LocalLLMAnalyzer:
                 except json.JSONDecodeError:
                     pass
 
-            self._logger.warning("Failed to parse Local LLM JSON. Keeping raw text.")
+            self._logger.warning(f"Failed to parse Local LLM JSON. Raw text: {cleaned}")
+            if match:
+                self._logger.debug(f"Candidate JSON: {candidate}")
+
             return {}
 
     def _build_prompt(self, record):  # 既存のプロンプト組み立て関数名に合わせてください
