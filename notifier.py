@@ -15,6 +15,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
+from google.auth.exceptions import RefreshError
 
 from mirulog.config import get_settings
 from mirulog.logging_utils import init_logger
@@ -193,7 +194,15 @@ def authenticate_google_calendar():
     # 認証が必要な場合
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            try:
+                creds.refresh(Request())
+            except RefreshError:
+                # invalid_grant 等で失効している場合はトークンを破棄して再認証
+                try:
+                    os.remove('token.pickle')
+                except OSError:
+                    pass
+                creds = None
         else:
             flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
             try:
@@ -266,6 +275,35 @@ def _iter_activity_blocks(summary: DailySummary, *, date_str: str, tz) -> Iterab
     return blocks
 
 
+def _most_frequent_task_for_block(
+    summary: DailySummary,
+    *,
+    date_str: str,
+    tz,
+    block_start: datetime,
+    block_end: datetime,
+) -> str:
+    counts: defaultdict[str, int] = defaultdict(int)
+    for seg in summary.segments:
+        try:
+            start_dt, end_dt = _parse_period_on_date(date_str=date_str, period_label=seg.period_label, tz=tz)
+        except Exception:
+            continue
+
+        if end_dt <= block_start or start_dt >= block_end:
+            continue
+
+        task = (seg.dominant_task or "").strip()
+        if not task:
+            continue
+        counts[task] += 1
+
+    if not counts:
+        return "作業"
+
+    return max(counts.items(), key=lambda item: (item[1], item[0]))[0]
+
+
 def _upsert_event(service, *, calendar_id: str, event: dict) -> None:
     try:
         service.events().insert(calendarId=calendar_id, body=event).execute()
@@ -305,6 +343,13 @@ def _export_activity_windows_to_calendar(summary: DailySummary, settings, logger
         minutes = float(b.get("minutes", 0.0))
         start_hhmm = start_dt.strftime("%H%M")
         end_hhmm = end_dt.strftime("%H%M")
+        task = _most_frequent_task_for_block(
+            summary,
+            date_str=summary.date,
+            tz=tz,
+            block_start=start_dt,
+            block_end=end_dt,
+        )
 
         desc = "\n".join(
             [
@@ -315,7 +360,7 @@ def _export_activity_windows_to_calendar(summary: DailySummary, settings, logger
 
         event = {
             "id": _stable_event_id(date_compact=date_compact, start_hhmm=start_hhmm, end_hhmm=end_hhmm, kind="activity"),
-            "summary": "Miru-Log",
+            "summary": f"Miru-Log: {task}",
             "description": desc,
             "start": {"dateTime": start_dt.isoformat(), "timeZone": str(tz)},
             "end": {"dateTime": end_dt.isoformat(), "timeZone": str(tz)},

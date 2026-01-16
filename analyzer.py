@@ -8,6 +8,7 @@ from json import JSONDecodeError
 from typing import Any
 from datetime import datetime
 from pathlib import Path
+import sqlite3
 
 from mirulog.capture import CaptureManager
 from mirulog.config import get_settings
@@ -55,6 +56,129 @@ def _update_tray_state(path: Path | None, script_key: str, updates: dict[str, An
     os.replace(tmp, path)
 
 
+def initialize_database(db_path: Path) -> None:
+    """Initialize the mirulog.db database with the required schema."""
+    if db_path.exists():
+        print(f"Database already exists at {db_path}. Initialization skipped.")
+        return
+
+    try:
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            # Example schema creation, adjust as needed
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS observations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    captured_at DATETIME NOT NULL,
+                    image_path TEXT NOT NULL,
+                    analysis_result TEXT
+                )
+                """
+            )
+            conn.commit()
+        print(f"Database initialized at {db_path}.")
+    except sqlite3.Error as e:
+        print(f"Failed to initialize database: {e}")
+
+
+def delete_data_before_date(capture_root: Path, archive_root: Path, date: str) -> None:
+    """Delete captures and database records before the specified date."""
+    try:
+        cutoff_date = datetime.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        print(f"Invalid date format: {date}. Use YYYY-MM-DD.")
+        return
+
+    for pc_name, per_pc_archive_root in _detect_analysis_targets(archive_root):
+        per_pc_capture_root = _guess_capture_root_for_pc(
+            global_capture_root=capture_root,
+            per_pc_archive_root=per_pc_archive_root,
+            pc_name=pc_name,
+        )
+
+        for folder in [per_pc_capture_root, per_pc_archive_root]:
+            if folder.exists():
+                print(f"Scanning folder: {folder}")
+                for item in folder.rglob("*"):
+                    if item.is_file():
+                        try:
+                            file_date = datetime.strptime(item.parent.name, "%Y-%m-%d")
+                            if file_date < cutoff_date:
+                                item.unlink()
+                                print(f"Deleted file: {item}")
+                        except ValueError:
+                            print(f"Skipping file: {item} (Reason: Invalid date format or other error)")
+                            continue
+
+        db_path = per_pc_archive_root / "mirulog.db"
+        if db_path.exists():
+            try:
+                with sqlite3.connect(db_path) as conn:
+                    cursor = conn.cursor()
+                    cutoff_iso = cutoff_date.isoformat()
+
+                    cursor.execute(
+                        "DELETE FROM analysis WHERE capture_id IN (SELECT id FROM captures WHERE captured_at < ?)",
+                        (cutoff_iso,),
+                    )
+                    cursor.execute(
+                        "DELETE FROM captures WHERE captured_at < ?",
+                        (cutoff_iso,),
+                    )
+                    deleted_rows = cursor.rowcount
+                    conn.commit()
+                    print(f"Deleted {deleted_rows} records before {cutoff_date} in {db_path}.")
+
+                    cursor.execute("SELECT id, captured_at, image_path FROM captures")
+                    records = cursor.fetchall()
+
+                    for record_id, captured_at, image_path in records:
+                        try:
+                            stored_path = Path(image_path)
+                        except Exception:
+                            stored_path = None
+
+                        if stored_path and stored_path.exists():
+                            continue
+
+                        try:
+                            captured_dt = datetime.fromisoformat(captured_at)
+                            date_folder = captured_dt.strftime("%Y-%m-%d")
+                        except Exception:
+                            date_folder = None
+
+                        name = Path(image_path).name if image_path else ""
+                        candidates = []
+                        if date_folder:
+                            candidates.extend(
+                                [
+                                    per_pc_capture_root / date_folder / name,
+                                    per_pc_archive_root / date_folder / name,
+                                ]
+                            )
+                        candidates.extend([per_pc_capture_root / name, per_pc_archive_root / name])
+
+                        resolved = next((cand for cand in candidates if cand.exists()), None)
+                        if resolved:
+                            cursor.execute(
+                                "UPDATE captures SET image_path = ? WHERE id = ?",
+                                (str(resolved), record_id),
+                            )
+                            continue
+
+                        cursor.execute("DELETE FROM analysis WHERE capture_id = ?", (record_id,))
+                        cursor.execute("DELETE FROM captures WHERE id = ?", (record_id,))
+                        print(f"Deleted record {record_id} as file {image_path} does not exist.")
+
+                    conn.commit()
+                    print(f"Database synchronization complete for {db_path}.")
+            except sqlite3.Error as e:
+                print(f"Failed to delete records or synchronize database: {e}")
+        else:
+            print(f"Database file does not exist: {db_path}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Analyze pending Miru-Log captures via Gemini")
     parser.add_argument(
@@ -67,6 +191,16 @@ def main() -> None:
         "--until-empty",
         action="store_true",
         help="Keep analyzing in batches until no pending captures remain (stops on rate limit/errors)",
+    )
+    parser.add_argument(
+        "--init-db",
+        action="store_true",
+        help="Initialize the mirulog.db database with the required schema.",
+    )
+    parser.add_argument(
+        "--delete-before",
+        type=str,
+        help="Delete captures and database records before the specified date (YYYY-MM-DD).",
     )
     args = parser.parse_args()
 
@@ -145,6 +279,16 @@ def main() -> None:
                 for index, record in enumerate(pending, start=1):
                     try:
                         record = _resolve_record_image_path(record, per_pc_capture_root, per_pc_archive_root)
+                        image_path = Path(record.image_path)
+                        if not image_path.exists():
+                            logger.warning(
+                                "Missing capture file. Deleting record (pc=%s id=%s path=%s)",
+                                pc_name or "(single)",
+                                record.id,
+                                image_path,
+                            )
+                            repo.delete_capture(record.id)
+                            continue
                         result = analyzer.analyze(record)
                         repo.save_analysis(result)
                         capture_manager.archive(record, delete_original=settings.capture.delete_after_analysis)

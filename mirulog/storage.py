@@ -122,6 +122,17 @@ class ObservationRepository:
             )
             conn.commit()
 
+    def delete_capture(self, capture_id: int) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM analysis WHERE capture_id = ?", (capture_id,))
+            conn.execute("DELETE FROM captures WHERE id = ?", (capture_id,))
+            conn.commit()
+
+    def update_capture_image_path(self, capture_id: int, image_path: Path) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("UPDATE captures SET image_path = ? WHERE id = ?", (str(image_path), capture_id))
+            conn.commit()
+
     def daily_analysis(self, date_prefix: str) -> List[tuple]:
         query = """
             SELECT c.id, c.captured_at, c.window_title, c.active_application, a.description, a.primary_task, a.confidence, a.tags, a.raw_response
