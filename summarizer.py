@@ -241,7 +241,7 @@ def render_markdown(summary: DailySummary) -> str:
 
     return "\n".join(lines)
 
-def _aggregate_task_totals(summary: DailySummary, *, top_n: int = 8) -> list[tuple[str, float]]:
+def _aggregate_task_totals(summary: DailySummary, *, top_n: int = 12) -> list[tuple[str, float]]:
     totals: dict[str, float] = {}
     for segment in summary.segments:
         totals[segment.dominant_task] = totals.get(segment.dominant_task, 0.0) + segment.duration_minutes
@@ -362,37 +362,72 @@ def _normalize_task_label(task: str) -> str:
 
     raw = (task or "").strip()
     if not raw:
-        return "Unclassified"
+        return "その他"
 
     t = raw.lower()
 
+    if t in {"unclassified", "unknown", "other", "misc", "n/a", "-", "(none)", "その他", "未分類"}:
+        return "その他"
+
     # Communication / coordination
-    if any(k in t for k in ["メール", "mail", "slack", "teams", "チャット", "連絡", "返信", "対応"]):
+    if any(k in t for k in ["メール", "mail", "slack", "teams", "チャット", "連絡", "返信", "対応", "discord", "line"]):
         return "連絡/調整"
 
     # Meetings
     if any(k in t for k in ["mtg", "meeting", "会議", "打合せ", "打ち合わせ", "面談", "1on1", "レビュー会"]):
         return "ミーティング"
 
+    # Planning / task management
+    if any(k in t for k in ["計画", "プラン", "タスク", "todo", "backlog", "チケット", "issue", "jira", "notion", "trello"]):
+        return "計画/タスク管理"
+
+    # Reviews / QA
+    if any(k in t for k in ["review", "レビュー", "code review", "pr", "pull request", "merge", "品質", "qa", "検品"]):
+        return "レビュー/品質確認"
+
     # Coding / development
-    if any(k in t for k in ["実装", "コーディング", "コード", "開発", "修正", "refactor", "リファクタ", "プログラム"]):
+    if any(k in t for k in ["実装", "コーディング", "コード", "開発", "修正", "refactor", "リファクタ", "プログラム", "commit", "コミット"]):
         return "開発(コード)"
 
     # Debugging / troubleshooting
-    if any(k in t for k in ["debug", "デバッグ", "不具合", "バグ", "エラー", "障害", "原因", "調査(不具合)"]):
+    if any(k in t for k in ["debug", "デバッグ", "不具合", "バグ", "エラー", "障害", "原因", "調査(不具合)", "exception", "traceback"]):
         return "デバッグ/不具合対応"
 
+    # Testing / build / deploy
+    if any(k in t for k in ["test", "テスト", "検証", "動作確認", "build", "ビルド", "ci", "unit", "integration", "実行", "run", "deploy", "リリース"]):
+        return "テスト/ビルド"
+
     # Research
-    if any(k in t for k in ["調査", "リサーチ", "検討", "比較", "方針", "設計", "仕様", "理解"]):
+    if any(k in t for k in ["調査", "リサーチ", "検討", "比較", "方針", "設計", "仕様", "理解", "検索", "調べ", "browser", "web", "ウェブ"]):
         return "調査/検討"
 
     # Docs / writing
-    if any(k in t for k in ["ドキュメント", "資料", "readme", "md", "markdown", "メモ", "日報", "報告", "文章"]):
+    if any(k in t for k in ["ドキュメント", "資料", "readme", "md", "markdown", "メモ", "日報", "報告", "文章", "wiki", "ドキュメン"]):
         return "ドキュメント/記録"
 
     # Reading
-    if any(k in t for k in ["閲覧", "読む", "読書", "視聴", "学習", "チュートリアル"]):
+    if any(k in t for k in ["閲覧", "読む", "読書", "視聴", "学習", "チュートリアル", "勉強"]):
         return "閲覧/学習"
+
+    # Office / data work
+    if any(k in t for k in ["excel", "スプレッドシート", "spreadsheet", "表計算", "集計", "ppt", "powerpoint", "スライド", "word"]):
+        return "事務/資料"
+
+    # Design / visuals
+    if any(k in t for k in ["デザイン", "figma", "ui", "ux", "図解", "画像", "イラスト", "バナー"]):
+        return "デザイン/図解"
+
+    # Environment / ops
+    if any(k in t for k in ["設定", "環境構築", "セットアップ", "インストール", "アップデート", "docker", "k8s", "端末", "powershell", "terminal", "cmd", "wsl", "シェル", "運用"]):
+        return "環境/運用"
+
+    # Admin / misc
+    if any(k in t for k in ["経費", "請求", "勤怠", "事務", "申請", "精算"]):
+        return "事務/管理"
+
+    # Break / personal
+    if any(k in t for k in ["休憩", "雑談", "私用", "離席", "移動"]):
+        return "休憩/雑務"
 
     return raw
 

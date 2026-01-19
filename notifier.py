@@ -120,7 +120,7 @@ def render_japanese_report(summary: DailySummary) -> str:
     lines.append("---")
     return "\n".join(lines)
 
-def _aggregate_task_totals(summary: DailySummary, *, top_n: int = 8) -> list[tuple[str, float]]:
+def _aggregate_task_totals(summary: DailySummary, *, top_n: int = 12) -> list[tuple[str, float]]:
     totals: defaultdict[str, float] = defaultdict(float)
     for segment in summary.segments:
         totals[segment.dominant_task] += segment.duration_minutes
