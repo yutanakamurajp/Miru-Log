@@ -12,7 +12,7 @@ def init_logger(name: str, log_dir: Path, level: str = "INFO") -> logging.Logger
 
     if not logger.handlers:
         log_path = log_dir / f"{name}.log"
-        file_handler = RotatingFileHandler(log_path, maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8")
+        file_handler = RotatingFileHandler(log_path, maxBytes=1 * 1024 * 1024, backupCount=5, encoding="utf-8")
         formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
         file_handler.setFormatter(formatter)
 
