@@ -4,12 +4,16 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-import pyautogui
+try:
+    import pyautogui
+except ImportError:
+    pyautogui = None
 
 from .models import CaptureRecord
 from .utils import ensure_directory, get_active_window, hash_file, is_session_locked, timestamp_slug
 
-pyautogui.FAILSAFE = False
+if pyautogui:
+    pyautogui.FAILSAFE = False
 
 
 class CaptureSkipped(RuntimeError):

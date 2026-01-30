@@ -406,11 +406,16 @@ def _resolve_record_image_path(record, capture_root: Path, archive_root: Path):
     """
 
     try:
-        path = Path(record.image_path)
+        path_str = str(record.image_path)
+        # Convert Windows backslashes and drive letter if needed
+        if "\\" in path_str and ":" in path_str:
+            path_str = "/mnt/" + path_str[0].lower() + path_str[2:].replace("\\", "/")
+        path = Path(path_str)
     except Exception:
         return record
 
     if path.exists():
+        record.image_path = path
         return record
 
     name = path.name
