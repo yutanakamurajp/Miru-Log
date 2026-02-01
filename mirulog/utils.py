@@ -26,8 +26,11 @@ def get_active_window() -> Tuple[str, str]:
     if os.name != "nt":
         return "Unknown", "Unknown"
 
-    user32 = ctypes.windll.user32
-    kernel32 = ctypes.windll.kernel32
+    try:
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+    except AttributeError:
+        return "Unknown", "Unknown"
 
     hwnd = user32.GetForegroundWindow()
     if not hwnd:
@@ -66,22 +69,28 @@ def is_session_locked() -> bool:
         # Some environments report false positives via WTS. If WTS says locked
         # but the input desktop is available, treat as unlocked.
         if locked:
-            user32 = ctypes.windll.user32
-            DESKTOP_SWITCHDESKTOP = 0x0100
-            hdesktop = user32.OpenInputDesktop(0, False, DESKTOP_SWITCHDESKTOP)
-            if hdesktop != 0:
-                user32.CloseDesktop(hdesktop)
-                return False
+            try:
+                user32 = ctypes.windll.user32
+                DESKTOP_SWITCHDESKTOP = 0x0100
+                hdesktop = user32.OpenInputDesktop(0, False, DESKTOP_SWITCHDESKTOP)
+                if hdesktop != 0:
+                    user32.CloseDesktop(hdesktop)
+                    return False
+            except AttributeError:
+                pass
         return locked
 
     # Fallback: heuristic based on input desktop availability.
-    user32 = ctypes.windll.user32
-    DESKTOP_SWITCHDESKTOP = 0x0100
-    hdesktop = user32.OpenInputDesktop(0, False, DESKTOP_SWITCHDESKTOP)
-    if hdesktop == 0:
-        return True
-    user32.CloseDesktop(hdesktop)
-    return False
+    try:
+        user32 = ctypes.windll.user32
+        DESKTOP_SWITCHDESKTOP = 0x0100
+        hdesktop = user32.OpenInputDesktop(0, False, DESKTOP_SWITCHDESKTOP)
+        if hdesktop == 0:
+            return True
+        user32.CloseDesktop(hdesktop)
+        return False
+    except AttributeError:
+        return False
 
 
 def _wts_is_session_locked() -> bool | None:
