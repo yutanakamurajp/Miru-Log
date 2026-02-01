@@ -22,7 +22,9 @@ def main() -> None:
     logger = init_logger("summarizer", settings.logging.directory, settings.logging.level)
     target_date = args.date or datetime.now(tz=settings.timezone).strftime("%Y-%m-%d")
 
-    rows = _load_daily_rows(settings.capture.archive_root, target_date, logger)
+    # Note: analyzed results are stored in per-PC `mirulog.db` under AnalyzerSettings.data_root
+    # (default: app root). Using capture.archive_root here would miss the DB.
+    rows = _load_daily_rows(settings.analyzer.data_root, target_date, logger)
     if not rows:
         logger.warning("No analyzed captures for %s", target_date)
         summary = DailySummary(
@@ -52,10 +54,10 @@ def main() -> None:
     logger.info("Daily summary saved to %s", markdown_path)
 
 
-def _load_daily_rows(archive_root: Path, target_date: str, logger):
+def _load_daily_rows(data_root: Path, target_date: str, logger):
     """Load analyzed rows for a date.
 
-    - If archive_root/mirulog.db exists: single DB mode.
+    - If data_root/mirulog.db exists: single DB mode.
     - Else: multi-PC mode (scan immediate subfolders for */mirulog.db).
 
     Returns rows compatible with build_daily_summary().
@@ -63,8 +65,8 @@ def _load_daily_rows(archive_root: Path, target_date: str, logger):
     """
 
     pc_dbs: list[tuple[str, Path]] = []
-    if archive_root.exists():
-        for child in archive_root.iterdir():
+    if data_root.exists():
+        for child in data_root.iterdir():
             if not child.is_dir():
                 continue
             db_path = child / "mirulog.db"
@@ -75,7 +77,7 @@ def _load_daily_rows(archive_root: Path, target_date: str, logger):
     # This supports setups where an older single-DB (archive_root/mirulog.db)
     # still exists alongside the new per-PC folders.
     if pc_dbs:
-        logger.info("Multi-PC archive detected under %s (pcs=%s)", archive_root, len(pc_dbs))
+        logger.info("Multi-PC DBs detected under %s (pcs=%s)", data_root, len(pc_dbs))
         all_rows = []
         for pc_name, db_path in sorted(pc_dbs, key=lambda x: x[0].lower()):
             repo = ObservationRepository(db_path)
@@ -87,7 +89,7 @@ def _load_daily_rows(archive_root: Path, target_date: str, logger):
         all_rows.sort(key=lambda r: r[2])
         return all_rows
 
-    single_db = archive_root / "mirulog.db"
+    single_db = data_root / "mirulog.db"
     if single_db.exists():
         repo = ObservationRepository(single_db)
         return repo.daily_analysis(target_date)

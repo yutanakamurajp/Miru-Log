@@ -26,17 +26,44 @@
 ## 3. 主要モジュール構成
 
 1. **`observer.py`**: 操作中のみ1分間隔でSSを撮影。アイドル状態（5分以上無操作）時は停止。
+   - データは `<EXE配置場所>/<PC名>/captures/` に保存
+   - メタデータは `<EXE配置場所>/<PC名>/mirulog.db` (SQLite) に記録
 2. **`analyzer.py`**: Gemini APIを呼び出し、画像から「何をしていたか」を言語化。
+   - 複数PCのデータを集約可能（`ANALYZER_DATA_ROOT` で指定）
+   - 解析後は `<PC名>/archive/` に移動
 3. **`summarizer.py`**: 1日のログを統合し、日報テキストを生成し、markdown形式でまとめたファイルを出力する。
 4. **`notifier.py`**: 図解画像と日報をメールで送信。
 
-## 4. 開発・実装の原則
+## 4. データ保存構造
 
-* **Privacy First**: 撮影した画像は解析後、速やかに削除またはアーカイブする設定にする。`.gitignore`に画像フォルダを必ず含める。
+各PCは独立したフォルダにデータを保存し、複数PC環境での集約を容易にする：
+
+```
+<mirulog-observer.exeの配置場所>/
+├─ mirulog-observer.exe
+├─ .env (オプション)
+├─ DESKTOP-ABC123/          # PC名フォルダ（自動作成）
+│  ├─ captures/YYYY-MM-DD/  # 未解析キャプチャ
+│  ├─ archive/YYYY-MM-DD/   # 解析済みキャプチャ
+│  ├─ logs/observer.log     # ログファイル
+│  └─ mirulog.db            # SQLiteデータベース
+└─ LAPTOP-XYZ789/           # 別PCのデータ
+   └─ ...
+```
+
+**環境変数による制御:**
+- `MIRULOG_ROOT`: アプリケーションルートを明示指定（通常は自動検出）
+- `MIRULOG_COMPUTERNAME`: PC名を明示指定（通常は `%COMPUTERNAME%` から自動取得）
+- `ANALYZER_DATA_ROOT`: Analyzerが参照するデータルート（複数PCの親フォルダ）
+
+## 5. 開発・実装の原則
+
+* **Privacy First**: 撮影した画像は解析後、速やかに削除またはアーカイブする設定にする。`.gitignore`に各PC名フォルダを含める。
 * **Efficiency**: 画面ロック中やスリープ中はリソースを消費しないよう、Windowsのセッション状態を考慮する。
+* **Multi-PC Support**: 複数PCのデータを集約できる構造にする。共有フォルダにEXEを配置すれば、自動的にPC名フォルダが作成される。
 * **Scalability**: 将来的にチーム共有機能（Slack/Notion連携など）を拡張しやすい構造にする。
 
-## 5. 指示ガイドライン
+## 6. 指示ガイドライン
 
 コードを生成する際は、以下の点に注意せよ：
 

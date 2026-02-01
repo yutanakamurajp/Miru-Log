@@ -40,7 +40,7 @@ def main() -> None:
 
     settings = get_settings()
     logger = init_logger("observer", settings.logging.directory, settings.logging.level)
-    repository = ObservationRepository(settings.capture.archive_root / "mirulog.db")
+    repository = ObservationRepository(settings.capture.archive_root.parent / "mirulog.db")
     capture_manager = CaptureManager(settings.capture.capture_root, settings.capture.archive_root, settings.timezone, logger)
     monitor = InputActivityMonitor(timedelta(minutes=settings.capture.idle_threshold_minutes), logger)
     monitor.start()

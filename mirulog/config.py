@@ -44,6 +44,7 @@ class LocalLLMSettings:
 @dataclass(frozen=True)
 class AnalyzerSettings:
     backend: str  # "gemini" or "local"
+    data_root: Path  # Root directory containing per-PC data folders
 
 
 @dataclass(frozen=True)
@@ -87,17 +88,33 @@ def get_settings() -> AppSettings:
     tz_name = os.getenv("TIMEZONE", "Asia/Tokyo")
     timezone = ZoneInfo(tz_name)
 
+    # アプリルートとPC名から動的にデフォルトパスを構築
+    app_root = get_application_root()
+    computer_name = get_computer_name()
+    pc_data_root = app_root / computer_name
+
+    default_capture_root = str(pc_data_root / "captures")
+    default_archive_root = str(pc_data_root / "archive")
+    default_log_dir = str(pc_data_root / "logs")
+
     capture = CaptureSettings(
         interval_seconds=int(os.getenv("CAPTURE_INTERVAL_SECONDS", "60")),
         idle_threshold_minutes=int(os.getenv("IDLE_THRESHOLD_MINUTES", "5")),
-        capture_root=Path(_expand_env_vars(os.getenv("CAPTURE_ROOT", "data/captures"))).resolve(),
-        archive_root=Path(_expand_env_vars(os.getenv("ARCHIVE_ROOT", "data/archive"))).resolve(),
+        capture_root=Path(_expand_env_vars(os.getenv("CAPTURE_ROOT") or default_capture_root)).resolve(),
+        archive_root=Path(_expand_env_vars(os.getenv("ARCHIVE_ROOT") or default_archive_root)).resolve(),
         delete_after_analysis=_as_bool(os.getenv("DELETE_CAPTURE_AFTER_ANALYSIS", "true")),
         retention_days=int(os.getenv("DATA_RETENTION_DAYS", "7")),
     )
 
+    # Analyzer data root: デフォルトはアプリケーションルート
+    default_analyzer_data_root = str(app_root)
+    analyzer_data_root = Path(_expand_env_vars(
+        os.getenv("ANALYZER_DATA_ROOT") or default_analyzer_data_root
+    )).resolve()
+
     analyzer_settings = AnalyzerSettings(
         backend=os.getenv("ANALYZER_BACKEND", "gemini").strip().lower(),
+        data_root=analyzer_data_root,
     )
 
     gemini_api_key = os.getenv("GEMINI_API_KEY")
@@ -131,7 +148,7 @@ def get_settings() -> AppSettings:
     )
 
     logging_settings = LoggingSettings(
-        directory=Path(_expand_env_vars(os.getenv("LOG_DIR", "logs"))).resolve(),
+        directory=Path(_expand_env_vars(os.getenv("LOG_DIR") or default_log_dir)).resolve(),
         level=os.getenv("LOG_LEVEL", "INFO").upper(),
     )
 
@@ -177,6 +194,32 @@ def _expand_env_vars(value: str) -> str:
 
     # Python's os.path.expandvars supports %VAR% on Windows and $VAR/${VAR}.
     return os.path.expandvars(value)
+
+
+def get_application_root() -> Path:
+    """EXE/スクリプトの配置ディレクトリを取得する。
+
+    優先度:
+    1. 環境変数 MIRULOG_ROOT が指定されていればそれを使用
+    2. PyInstaller でバンドルされている場合 → sys.executable の親
+    3. Python直接実行 → config.py の親の親（リポジトリルート）
+    """
+    explicit = os.getenv("MIRULOG_ROOT")
+    if explicit:
+        return Path(explicit).resolve()
+
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+
+    return Path(__file__).resolve().parents[1]
+
+
+def get_computer_name() -> str:
+    """PC名を取得する。MIRULOG_COMPUTERNAME でオーバーライド可能。"""
+    override = os.getenv("MIRULOG_COMPUTERNAME")
+    if override:
+        return override.strip()
+    return os.environ.get("COMPUTERNAME", "unknown")
 
 
 def _find_dotenv_path() -> Path | None:

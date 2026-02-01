@@ -82,7 +82,7 @@ def initialize_database(db_path: Path) -> None:
         print(f"Failed to initialize database: {e}")
 
 
-def delete_data_before_date(capture_root: Path, archive_root: Path, date: str) -> None:
+def delete_data_before_date(data_root: Path, date: str) -> None:
     """Delete captures and database records before the specified date."""
     try:
         cutoff_date = datetime.strptime(date, "%Y-%m-%d")
@@ -90,12 +90,9 @@ def delete_data_before_date(capture_root: Path, archive_root: Path, date: str) -
         print(f"Invalid date format: {date}. Use YYYY-MM-DD.")
         return
 
-    for pc_name, per_pc_archive_root in _detect_analysis_targets(archive_root):
-        per_pc_capture_root = _guess_capture_root_for_pc(
-            global_capture_root=capture_root,
-            per_pc_archive_root=per_pc_archive_root,
-            pc_name=pc_name,
-        )
+    for pc_name, pc_data_root in _detect_analysis_targets(data_root):
+        per_pc_capture_root = pc_data_root / "captures"
+        per_pc_archive_root = pc_data_root / "archive"
 
         for folder in [per_pc_capture_root, per_pc_archive_root]:
             if folder.exists():
@@ -111,7 +108,7 @@ def delete_data_before_date(capture_root: Path, archive_root: Path, date: str) -
                             print(f"Skipping file: {item} (Reason: Invalid date format or other error)")
                             continue
 
-        db_path = per_pc_archive_root / "mirulog.db"
+        db_path = pc_data_root / "mirulog.db"
         if db_path.exists():
             try:
                 with sqlite3.connect(db_path) as conn:
@@ -217,7 +214,9 @@ def main() -> None:
     )
 
     try:
-        targets = _detect_analysis_targets(settings.capture.archive_root)
+        # データルート: 複数PCのデータフォルダを含む親ディレクトリ
+        data_root = settings.analyzer.data_root
+        targets = _detect_analysis_targets(data_root)
 
         if settings.analyzer.backend == "local":
             analyzer = LocalLLMAnalyzer(settings.local_llm, logger)
@@ -256,16 +255,13 @@ def main() -> None:
             _update_tray_state(tray_state_file, "analyzer.py", {"progress": progress})
 
         # Iterate targets sequentially to avoid SQLite concurrency issues.
-        for pc_name, per_pc_archive_root in targets:
-            repo = ObservationRepository(per_pc_archive_root / "mirulog.db")
-            per_pc_capture_root = _guess_capture_root_for_pc(
-                global_capture_root=settings.capture.capture_root,
-                per_pc_archive_root=per_pc_archive_root,
-                pc_name=pc_name,
-            )
+        for pc_name, pc_data_root in targets:
+            repo = ObservationRepository(pc_data_root / "mirulog.db")
+            per_pc_capture_root = pc_data_root / "captures"
+            per_pc_archive_root = pc_data_root / "archive"
             capture_manager = CaptureManager(per_pc_capture_root, per_pc_archive_root, settings.timezone, logger)
 
-            logger.info("Analyzing target: pc=%s archive_root=%s capture_root=%s", pc_name or "(single)", per_pc_archive_root, per_pc_capture_root)
+            logger.info("Analyzing target: pc=%s data_root=%s", pc_name or "(single)", pc_data_root)
 
             while True:
                 pending = repo.pending_captures(limit=batch_size)
@@ -341,17 +337,17 @@ def main() -> None:
         raise
 
 
-def _detect_analysis_targets(archive_root: Path) -> list[tuple[str | None, Path]]:
-    """Return [(pc_name, per_pc_archive_root), ...] in processing order.
+def _detect_analysis_targets(data_root: Path) -> list[tuple[str | None, Path]]:
+    """Return [(pc_name, pc_data_root), ...] in processing order.
 
-    If archive_root contains subfolders with mirulog.db, treat as multi-PC mode.
-    Otherwise, single target (None, archive_root).
+    If data_root contains subfolders with mirulog.db, treat as multi-PC mode.
+    Otherwise, single target (None, data_root).
     """
 
     pc_dirs: list[tuple[str, Path]] = []
     try:
-        if archive_root.exists():
-            for child in archive_root.iterdir():
+        if data_root.exists():
+            for child in data_root.iterdir():
                 if not child.is_dir():
                     continue
                 if (child / "mirulog.db").exists():
@@ -361,41 +357,7 @@ def _detect_analysis_targets(archive_root: Path) -> list[tuple[str | None, Path]
 
     if pc_dirs:
         return sorted(pc_dirs, key=lambda item: item[0].lower())
-    return [(None, archive_root)]
-
-
-def _guess_capture_root_for_pc(
-    *,
-    global_capture_root: Path,
-    per_pc_archive_root: Path,
-    pc_name: str | None,
-) -> Path:
-    """Best-effort mapping from per-PC archive folder to capture folder.
-
-    For centralized analysis to work, the analyzer must be able to read the image files.
-    Prefer shared paths where the aggregator machine can access captures.
-    """
-
-    if not pc_name:
-        return global_capture_root
-
-    # Explicit override: parent folder that contains per-PC capture folders.
-    capture_parent = (os.getenv("MIRULOG_CAPTURE_ROOT_PARENT") or "").strip()
-    if capture_parent:
-        return (Path(os.path.expandvars(capture_parent)) / pc_name).resolve()
-
-    # If CAPTURE_ROOT is a parent folder, use CAPTURE_ROOT/<PC> when it exists.
-    candidate = (global_capture_root / pc_name)
-    if candidate.exists():
-        return candidate
-
-    # Common default layout: <root>/archive/<PC> and <root>/captures/<PC>
-    sibling = per_pc_archive_root.parent / "captures" / pc_name
-    if sibling.exists():
-        return sibling
-
-    # Fallback: keep global capture root.
-    return global_capture_root
+    return [(None, data_root)]
 
 
 def _resolve_record_image_path(record, capture_root: Path, archive_root: Path):
