@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import re
 from dataclasses import dataclass
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import requests
+from PIL import Image
 
 from .config import LocalLLMSettings
 from .models import AnalysisResult, CaptureRecord
@@ -222,9 +224,26 @@ class LocalLLMAnalyzer:
         return res
 
     def _image_as_data_url(self, image_path: Path) -> str:
-        raw = image_path.read_bytes()
+        """Read image, resize if necessary, and return as a base64 data URL."""
+        max_size = 1024  # Max width or height
+        
+        with Image.open(image_path) as img:
+            # Convert to RGB if it's RGBA or something else (some models dislike Alpha)
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            
+            # Resize if too large
+            if max(img.width, img.height) > max_size:
+                ratio = max_size / max(img.width, img.height)
+                new_size = (int(img.width * ratio), int(img.height * ratio))
+                img = img.resize(new_size, Image.Resampling.LANCZOS)
+            
+            # Save to buffer
+            buffer = io.BytesIO()
+            img.save(buffer, format="PNG")
+            raw = buffer.getvalue()
+
         encoded = base64.b64encode(raw).decode("ascii")
-        # LM Studio typically accepts data URLs for image_url.
         return f"data:image/png;base64,{encoded}"
 
     def _parse_payload(self, text: str) -> dict[str, Any]:
