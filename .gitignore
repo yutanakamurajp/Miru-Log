@@ -1,10 +1,12 @@
 ﻿.env
 .venv/
+venv/
 .claude/
 __pycache__/
 *.pyc
 *.db
 data/
+*.bat
 
 # Google OAuth (Calendar)
 credentials.json
