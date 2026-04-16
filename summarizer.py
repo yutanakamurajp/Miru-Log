@@ -26,18 +26,10 @@ def main() -> None:
     # (default: app root). Using capture.archive_root here would miss the DB.
     rows = _load_daily_rows(settings.analyzer.data_root, target_date, logger)
     if not rows:
-        logger.warning("No analyzed captures for %s", target_date)
-        summary = DailySummary(
-            date=target_date,
-            segments=[],
-            blocking_issues=[],
-            follow_ups=[],
-            total_active_minutes=0.0,
-            markdown_path=None,
-            dev_context=None,
-        )
-    else:
-        summary = build_daily_summary(rows, target_date, settings.capture.interval_seconds)
+        logger.warning("No analyzed captures for %s — skipping file output", target_date)
+        return
+
+    summary = build_daily_summary(rows, target_date, settings.capture.interval_seconds)
 
     summary_dir = settings.output.summary_dir
     summary_dir.mkdir(parents=True, exist_ok=True)
