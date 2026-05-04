@@ -1,0 +1,74 @@
+2026-05-04 19:24:42,293 [INFO] pipeline: ============================================================
+2026-05-04 19:24:42,293 [INFO] pipeline: Miru-Log Pipeline Started
+2026-05-04 19:24:42,293 [INFO] pipeline: Target date: 2026-05-04
+2026-05-04 19:24:42,293 [INFO] pipeline: ============================================================
+2026-05-04 19:24:42,293 [INFO] pipeline: Step 0: Running cleanup...
+2026-05-04 19:24:42,306 [INFO] pipeline: No database found for cleanup under C:\Users\nakamura\Repository\Miru-Log\--help
+2026-05-04 19:24:42,306 [INFO] pipeline: Cleanup completed successfully
+2026-05-04 19:24:42,307 [INFO] pipeline: Step 1/3: Running analyzer...
+2026-05-04 19:24:42,926 [INFO] pipeline: Analyzer completed successfully
+2026-05-04 19:24:42,927 [INFO] pipeline: Step 2/3: Running summarizer...
+2026-05-04 19:24:42,934 [INFO] pipeline: Summarizer completed successfully
+2026-05-04 19:24:42,935 [INFO] pipeline: Step 3/3: Skipped (--skip-notify)
+2026-05-04 19:24:42,935 [INFO] pipeline: ============================================================
+2026-05-04 19:24:42,935 [INFO] pipeline: Miru-Log Pipeline Completed Successfully
+2026-05-04 19:24:42,935 [INFO] pipeline: ============================================================
+2026-05-04 19:33:57,267 [INFO] pipeline: ============================================================
+2026-05-04 19:33:57,267 [INFO] pipeline: Miru-Log Pipeline Started
+2026-05-04 19:33:57,268 [INFO] pipeline: Target date: 2026-05-04
+2026-05-04 19:33:57,268 [INFO] pipeline: ============================================================
+2026-05-04 19:33:57,268 [INFO] pipeline: Step 0: Running cleanup...
+2026-05-04 19:33:57,504 [INFO] pipeline: Cleaning up records older than 7 days (pc=DESKTOP-TGEHJ3L db=C:\Users\nakamura\Dropbox\アプリ\Miru-Log\DESKTOP-TGEHJ3L\mirulog.db)
+2026-05-04 19:33:57,979 [INFO] pipeline: Deleted 14304 old capture records (pc=DESKTOP-TGEHJ3L)
+2026-05-04 19:33:57,979 [INFO] pipeline: Running VACUUM to reclaim disk space (pc=DESKTOP-TGEHJ3L)
+2026-05-04 19:33:57,986 [INFO] pipeline: VACUUM completed (pc=DESKTOP-TGEHJ3L)
+2026-05-04 19:33:57,986 [INFO] pipeline: Cleaning up records older than 7 days (pc=NAKAMURA-MAINPC db=C:\Users\nakamura\Dropbox\アプリ\Miru-Log\NAKAMURA-MAINPC\mirulog.db)
+2026-05-04 19:33:57,993 [INFO] pipeline: Deleted 13 old capture records (pc=NAKAMURA-MAINPC)
+2026-05-04 19:33:57,993 [INFO] pipeline: Running VACUUM to reclaim disk space (pc=NAKAMURA-MAINPC)
+2026-05-04 19:33:57,997 [INFO] pipeline: VACUUM completed (pc=NAKAMURA-MAINPC)
+2026-05-04 19:33:57,997 [INFO] pipeline: Cleaning up records older than 7 days (pc=NAKAMURA-NOTEG db=C:\Users\nakamura\Dropbox\アプリ\Miru-Log\NAKAMURA-NOTEG\mirulog.db)
+2026-05-04 19:33:58,326 [INFO] pipeline: Deleted 59 old capture records (pc=NAKAMURA-NOTEG)
+2026-05-04 19:33:58,326 [INFO] pipeline: Running VACUUM to reclaim disk space (pc=NAKAMURA-NOTEG)
+2026-05-04 19:33:58,331 [INFO] pipeline: VACUUM completed (pc=NAKAMURA-NOTEG)
+2026-05-04 19:33:58,331 [INFO] pipeline: Cleaning up records older than 7 days (pc=NAKAMURA-SUB db=C:\Users\nakamura\Dropbox\アプリ\Miru-Log\NAKAMURA-SUB\mirulog.db)
+2026-05-04 19:33:58,338 [INFO] pipeline: Deleted 16 old capture records (pc=NAKAMURA-SUB)
+2026-05-04 19:33:58,338 [INFO] pipeline: Running VACUUM to reclaim disk space (pc=NAKAMURA-SUB)
+2026-05-04 19:33:58,342 [INFO] pipeline: VACUUM completed (pc=NAKAMURA-SUB)
+2026-05-04 19:33:58,342 [INFO] pipeline: Cleaning up records older than 7 days (pc=NAKAMURAPC db=C:\Users\nakamura\Dropbox\アプリ\Miru-Log\NAKAMURAPC\mirulog.db)
+2026-05-04 19:33:58,429 [INFO] pipeline: Deleted 3414 old capture records (pc=NAKAMURAPC)
+2026-05-04 19:33:58,429 [INFO] pipeline: Running VACUUM to reclaim disk space (pc=NAKAMURAPC)
+2026-05-04 19:33:58,434 [INFO] pipeline: VACUUM completed (pc=NAKAMURAPC)
+2026-05-04 19:33:58,434 [INFO] pipeline: Cleanup completed successfully
+2026-05-04 19:33:58,434 [INFO] pipeline: Step 1/3: Running analyzer...
+2026-05-04 19:34:06,310 [INFO] pipeline: Analyzer completed successfully
+2026-05-04 19:34:06,310 [INFO] pipeline: Step 2/3: Running summarizer...
+2026-05-04 19:34:06,328 [INFO] pipeline: Summarizer completed successfully
+2026-05-04 19:34:06,328 [INFO] pipeline: Step 3/3: Skipped (--skip-notify)
+2026-05-04 19:34:06,328 [INFO] pipeline: ============================================================
+2026-05-04 19:34:06,328 [INFO] pipeline: Miru-Log Pipeline Completed Successfully
+2026-05-04 19:34:06,328 [INFO] pipeline: ============================================================
+2026-05-04 19:41:21,579 [INFO] pipeline: ============================================================
+2026-05-04 19:41:21,579 [INFO] pipeline: Miru-Log Pipeline Started
+2026-05-04 19:41:21,579 [INFO] pipeline: Target date: 2026-05-04
+2026-05-04 19:41:21,579 [INFO] pipeline: ============================================================
+2026-05-04 19:41:21,579 [INFO] pipeline: Step 0: Running cleanup...
+2026-05-04 19:41:21,593 [INFO] pipeline: Cleaning up records older than 7 days (pc=DESKTOP-TGEHJ3L db=C:\Users\nakamura\Dropbox\アプリ\Miru-Log\DESKTOP-TGEHJ3L\mirulog.db)
+2026-05-04 19:41:21,595 [INFO] pipeline: Deleted 0 old capture records (pc=DESKTOP-TGEHJ3L)
+2026-05-04 19:41:21,595 [INFO] pipeline: Cleaning up records older than 7 days (pc=NAKAMURA-MAINPC db=C:\Users\nakamura\Dropbox\アプリ\Miru-Log\NAKAMURA-MAINPC\mirulog.db)
+2026-05-04 19:41:21,596 [INFO] pipeline: Deleted 0 old capture records (pc=NAKAMURA-MAINPC)
+2026-05-04 19:41:21,596 [INFO] pipeline: Cleaning up records older than 7 days (pc=NAKAMURA-NOTEG db=C:\Users\nakamura\Dropbox\アプリ\Miru-Log\NAKAMURA-NOTEG\mirulog.db)
+2026-05-04 19:41:21,598 [INFO] pipeline: Deleted 0 old capture records (pc=NAKAMURA-NOTEG)
+2026-05-04 19:41:21,598 [INFO] pipeline: Cleaning up records older than 7 days (pc=NAKAMURA-SUB db=C:\Users\nakamura\Dropbox\アプリ\Miru-Log\NAKAMURA-SUB\mirulog.db)
+2026-05-04 19:41:21,599 [INFO] pipeline: Deleted 0 old capture records (pc=NAKAMURA-SUB)
+2026-05-04 19:41:21,599 [INFO] pipeline: Cleaning up records older than 7 days (pc=NAKAMURAPC db=C:\Users\nakamura\Dropbox\アプリ\Miru-Log\NAKAMURAPC\mirulog.db)
+2026-05-04 19:41:21,600 [INFO] pipeline: Deleted 0 old capture records (pc=NAKAMURAPC)
+2026-05-04 19:41:21,600 [INFO] pipeline: Cleanup found no expired records
+2026-05-04 19:41:21,600 [INFO] pipeline: Cleanup completed successfully
+2026-05-04 19:41:21,601 [INFO] pipeline: Step 1/3: Running analyzer...
+2026-05-04 19:42:44,061 [INFO] pipeline: Analyzer completed successfully
+2026-05-04 19:42:44,061 [INFO] pipeline: Step 2/3: Running summarizer...
+2026-05-04 19:42:44,091 [INFO] pipeline: Summarizer completed successfully
+2026-05-04 19:42:44,092 [INFO] pipeline: Step 3/3: Skipped (--skip-notify)
+2026-05-04 19:42:44,092 [INFO] pipeline: ============================================================
+2026-05-04 19:42:44,093 [INFO] pipeline: Miru-Log Pipeline Completed Successfully
+2026-05-04 19:42:44,093 [INFO] pipeline: ============================================================

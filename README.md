@@ -210,6 +210,47 @@ python analyzer.py --until-empty
 # ANALYZER_DATA_ROOT=\\server\share\mirulog
 ```
 
+Windows のバッチで実行する場合は、[scripts/run_analyzer_aggregator.bat](scripts/run_analyzer_aggregator.bat) を使えます。
+
+```bat
+scripts\run_analyzer_aggregator.bat
+scripts\run_analyzer_aggregator.bat \\server\share\mirulog --limit 50
+```
+
+第1引数に共有ルートを渡すと、その実行だけ `ANALYZER_DATA_ROOT` を上書きします。第1引数を省略した場合は `.env` の `ANALYZER_DATA_ROOT` を使い、残りの引数はそのまま `analyzer.py` に渡します。
+
+解析から日報生成までを集約PCで回す場合は、[scripts/run_pipeline_aggregator.bat](scripts/run_pipeline_aggregator.bat) を使えます。
+
+```bat
+scripts\run_pipeline_aggregator.bat
+scripts\run_pipeline_aggregator.bat \\server\share\mirulog --date 2026-05-04
+scripts\run_pipeline_aggregator.bat \\server\share\mirulog --with-notify --date 2026-05-04
+```
+
+このバッチは既定で `pipeline.py --until-empty --skip-notify` を実行します。つまり、未解析キャプチャを空になるまで解析し、その日の日報生成までを行います。通知も含めたい場合だけ `--with-notify` を付けてください。
+
+集約PC用の `.env` サンプルは [scripts/aggregator.env](scripts/aggregator.env) に置いてあります。共有ルート、LLM バックエンド、出力先を調整して `.env` として使ってください。
+
+集約PCで日次実行をタスクスケジューラに登録する場合は、[scripts/register_aggregator_pipeline_task.ps1](scripts/register_aggregator_pipeline_task.ps1) を使えます。
+
+```powershell
+# 毎日 23:55 に解析+日報生成（通知なし）
+powershell -ExecutionPolicy Bypass -File scripts/register_aggregator_pipeline_task.ps1 `
+   -DataRoot "\\server\share\mirulog" `
+   -DailyTime "23:55"
+
+# 毎日 23:55 に解析+日報生成+通知
+powershell -ExecutionPolicy Bypass -File scripts/register_aggregator_pipeline_task.ps1 `
+   -DataRoot "\\server\share\mirulog" `
+   -DailyTime "23:55" `
+   -WithNotify
+
+# 削除
+powershell -ExecutionPolicy Bypass -File scripts/register_aggregator_pipeline_task.ps1 -Delete
+```
+
+`-DataRoot` を省略した場合は `.env` の `ANALYZER_DATA_ROOT` を使います。追加の引数は `-PipelineArgs @('--limit','50')` のように `pipeline.py` へ渡せます。
+
 analyzer は `ANALYZER_DATA_ROOT` 直下の各PC名フォルダ（`<PC名>/mirulog.db` が存在するフォルダ）を自動検出し、順番に解析します。
 
 > 重要: 集約PCで別PCのスクリーンショット画像を解析するには、集約PCから画像ファイルのパスにアクセスできる必要があります。

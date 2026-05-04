@@ -102,21 +102,51 @@ def main() -> None:
 def _run_cleanup(logger) -> None:
     """Run database cleanup to remove old records."""
     settings = get_settings()
-    db_path = Path("mirulog.db")
-
     from mirulog.storage import ObservationRepository
-    repo = ObservationRepository(db_path)
 
     retention_days = settings.capture.retention_days
-    logger.info(f"Cleaning up records older than {retention_days} days")
+    cleanup_targets = _resolve_cleanup_targets(settings.analyzer.data_root)
+    if not cleanup_targets:
+        logger.info("No database found for cleanup under %s", settings.analyzer.data_root)
+        return
 
-    deleted_count = repo.cleanup_old_records(retention_days)
-    logger.info(f"Deleted {deleted_count} old capture records")
+    total_deleted = 0
+    for pc_name, db_path in cleanup_targets:
+        scope = f"pc={pc_name}" if pc_name else "single"
+        logger.info("Cleaning up records older than %s days (%s db=%s)", retention_days, scope, db_path)
 
-    if deleted_count > 0:
-        logger.info("Running VACUUM to reclaim disk space")
-        repo.vacuum()
-        logger.info("VACUUM completed")
+        repo = ObservationRepository(db_path)
+        deleted_count = repo.cleanup_old_records(retention_days)
+        total_deleted += deleted_count
+        logger.info("Deleted %s old capture records (%s)", deleted_count, scope)
+
+        if deleted_count > 0:
+            logger.info("Running VACUUM to reclaim disk space (%s)", scope)
+            repo.vacuum()
+            logger.info("VACUUM completed (%s)", scope)
+
+    if total_deleted == 0:
+        logger.info("Cleanup found no expired records")
+
+
+def _resolve_cleanup_targets(data_root: Path) -> list[tuple[str | None, Path]]:
+    pc_dbs: list[tuple[str, Path]] = []
+    if data_root.exists():
+        for child in data_root.iterdir():
+            if not child.is_dir():
+                continue
+            db_path = child / "mirulog.db"
+            if db_path.exists():
+                pc_dbs.append((child.name, db_path))
+
+    if pc_dbs:
+        return sorted(pc_dbs, key=lambda item: item[0].lower())
+
+    single_db = data_root / "mirulog.db"
+    if single_db.exists():
+        return [(None, single_db)]
+
+    return []
 
 
 def _run_analyzer(limit: int | None, until_empty: bool, logger) -> None:

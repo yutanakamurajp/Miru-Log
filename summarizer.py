@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List
 
+from mirulog.analysis_utils import extract_file_like_tokens, extract_urls, normalize_analysis_payload, parse_analysis_json
 from mirulog.config import get_settings
 from mirulog.logging_utils import init_logger
 from mirulog.models import DailySummary, SummarySegment
@@ -111,24 +112,40 @@ def build_daily_summary(rows, date_str: str, interval_seconds: int) -> DailySumm
         ts = datetime.fromisoformat(ts_str)
         task = _normalize_task_label(task or "Unclassified")
         tags = [t.strip() for t in (tags_str or "").split(",") if t.strip()]
+        payload = normalize_analysis_payload(
+            _best_effort_parse_json(raw_response or ""),
+            fallback_text=description or "",
+        )
+        heuristic_files = set(_extract_file_like_tokens(window_title or ""))
+        heuristic_files.update(_extract_file_like_tokens(description or ""))
+        heuristic_repos = set(_extract_repo_candidates(window_title or ""))
+        heuristic_repos.update(_extract_repo_candidates(description or ""))
+        heuristic_repos.update(_extract_repo_candidates(raw_response or ""))
+        repo_from_title = _extract_vscode_workspace_name(window_title or "")
+        if repo_from_title:
+            heuristic_repos.add(repo_from_title)
+        clean_description = payload.get("description") or str(description or "").strip() or "作業内容を確認している。"
+        if clean_description == "画面上の作業内容を確認している。":
+            clean_description = _build_contextual_description(
+                observed_files=sorted(heuristic_files),
+                observed_repositories=sorted(heuristic_repos),
+                fallback=clean_description,
+            )
         highlight_prefix = f"[{pc_name}] " if pc_name else ""
-        highlight = f"{highlight_prefix}{ts.strftime('%H:%M')} {description}"
+        highlight = f"{highlight_prefix}{ts.strftime('%H:%M')} {clean_description}"
 
-        payload = _best_effort_parse_json(raw_response or "")
         observed_files.update(_coerce_str_list(payload.get("observed_files")))
         observed_repos.update(_coerce_str_list(payload.get("observed_repositories")))
         observed_urls.update(_coerce_str_list(payload.get("observed_urls")))
 
         # Backward-compatible heuristic extraction for older rows.
-        observed_files.update(_extract_file_like_tokens(window_title or ""))
-        observed_files.update(_extract_file_like_tokens(description or ""))
-        repo_from_title = _extract_vscode_workspace_name(window_title or "")
-        if repo_from_title:
-            observed_repos.add(repo_from_title)
-        observed_urls.update(_extract_urls(description or ""))
+        observed_files.update(heuristic_files)
+        observed_repos.update(heuristic_repos)
+        observed_files.update(_extract_file_like_tokens(clean_description or ""))
+        observed_urls.update(_extract_urls(clean_description or ""))
 
-        blocking_entry = f"{highlight_prefix}{description}" if pc_name else description
-        if any(keyword in description.lower() for keyword in ("error", "fail", "exception")):
+        blocking_entry = f"{highlight_prefix}{clean_description}" if pc_name else clean_description
+        if any(keyword in clean_description.lower() for keyword in ("error", "fail", "exception")):
             blocking.append(blocking_entry)
         if any(tag.lower() in {"todo", "follow-up"} for tag in tags):
             followups.append(blocking_entry)
@@ -267,17 +284,7 @@ def to_dict(summary: DailySummary) -> dict:
     }
 
 def _best_effort_parse_json(text: str) -> dict:
-    cleaned = (text or "").strip()
-    if not cleaned:
-        return {}
-    if cleaned.startswith("```"):
-        cleaned = cleaned.split("\n", 1)[1]
-        if "```" in cleaned:
-            cleaned = cleaned.split("```", 1)[0]
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        return {}
+    return parse_analysis_json(text or "")
 
 
 def _coerce_str_list(value) -> list[str]:
@@ -295,16 +302,11 @@ _FILE_TOKEN_RE = re.compile(
 
 
 def _extract_file_like_tokens(text: str) -> list[str]:
-    if not text:
-        return []
-    return [m.group(0) for m in _FILE_TOKEN_RE.finditer(text)]
+    return extract_file_like_tokens(text or "")
 
 
 def _extract_urls(text: str) -> list[str]:
-    if not text:
-        return []
-    # Simple URL regex: stop at whitespace.
-    return re.findall(r"https?://\S+", text)
+    return extract_urls(text or "")
 
 
 def _extract_vscode_workspace_name(window_title: str) -> str | None:
@@ -327,6 +329,62 @@ def _extract_vscode_workspace_name(window_title: str) -> str | None:
         return _filter_workspace_candidate(candidate)
     # Single part might be workspace.
     return _filter_workspace_candidate(parts[0].strip())
+
+
+_TERMINAL_PATH_PATTERNS = [
+    re.compile(r"(?:^|\s)Cwd:\s*([A-Za-z]:[\\/][^\r\n]+)", re.IGNORECASE),
+    re.compile(r"(?:^|\s)PS\s+([A-Za-z]:[\\/][^>\r\n]+)>", re.IGNORECASE),
+    re.compile(r"(?:^|\s)([A-Za-z]:[\\/][^>\r\n|]+)>", re.IGNORECASE),
+    re.compile(r"(?:^|\s)(~[\\/][^\s\r\n|]+)", re.IGNORECASE),
+    re.compile(r"(?:^|\s)(?:[A-Za-z0-9_.-]+@)?[A-Za-z0-9_.-]+\s+(~[\\/][^\s\r\n|]+)", re.IGNORECASE),
+    re.compile(r"(?:^|\s)(/[A-Za-z0-9_./-]+/[A-Za-z0-9_./-]+)", re.IGNORECASE),
+]
+
+
+def _extract_repo_candidates(text: str) -> list[str]:
+    if not text:
+        return []
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for pattern in _TERMINAL_PATH_PATTERNS:
+        for match in pattern.finditer(text):
+            repo_name = _repo_name_from_path(match.group(1))
+            if repo_name and repo_name not in seen:
+                seen.add(repo_name)
+                candidates.append(repo_name)
+    return candidates
+
+
+def _repo_name_from_path(path_text: str) -> str | None:
+    normalized = (path_text or "").strip().rstrip(">:;,.|)]}\"")
+    if not normalized:
+        return None
+
+    normalized = normalized.replace("\\", "/")
+    parts = [part for part in normalized.split("/") if part and part not in {"~", "."}]
+    if not parts:
+        return None
+
+    candidate = parts[-1]
+    if "." in candidate:
+        return None
+    return _filter_workspace_candidate(candidate)
+
+
+def _build_contextual_description(
+    *,
+    observed_files: list[str],
+    observed_repositories: list[str],
+    fallback: str,
+) -> str:
+    if observed_repositories and observed_files:
+        return f"{observed_repositories[0]} で {observed_files[0]} などを確認している。"
+    if observed_files:
+        return f"{observed_files[0]} などを確認している。"
+    if observed_repositories:
+        return f"{observed_repositories[0]} で作業内容を確認している。"
+    return fallback
 
 
 def _filter_workspace_candidate(candidate: str) -> str | None:

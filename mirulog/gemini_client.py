@@ -10,26 +10,9 @@ from typing import Any, List
 import google.generativeai as genai
 from PIL import Image
 
+from .analysis_utils import ANALYSIS_PROMPT, normalize_analysis_payload, parse_analysis_json, payload_to_json_text
 from .config import GeminiSettings
 from .models import AnalysisResult, CaptureRecord
-
-PROMPT = """
-You are Miru-Log, a meticulous self-tracking assistant. You receive desktop screenshots and contextual metadata.
-Analyze what the user was doing. Respond strictly as compact JSON with keys:
-  - description: 1 sentence summary of the activity.
-    - primary_task: concise task label (<=6 words). Prefer ONE from:
-        ["開発(コード)", "デバッグ/不具合対応", "テスト/ビルド", "レビュー/品質確認", "調査/検討",
-         "ドキュメント/記録", "連絡/調整", "ミーティング", "計画/タスク管理", "環境/運用",
-         "閲覧/学習", "事務/資料", "デザイン/図解", "休憩/雑務", "その他"].
-  - tags: array of activity tags/keywords.
-  - confidence: float between 0 and 1 reflecting your certainty.
-    - observed_files: array of file paths/names you can read from the screenshot (if any).
-    - observed_repositories: array of repository/workspace names you can read from the screenshot (if any).
-    - observed_urls: array of http(s) URLs you can read from the screenshot (if any).
-All values must be written in Japanese. The JSON keys must remain in English as listed above.
-Focus on observable actions only.
-If you cannot confidently read items, return empty arrays for those keys.
-"""
 
 
 def _rdp_hint(window_title: str | None, process_name: str | None) -> str:
@@ -66,7 +49,7 @@ class GeminiAnalyzer:
         if not record.image_path.exists():
             raise FileNotFoundError(record.image_path)
 
-        prompt = f"{PROMPT}\nTimestamp: {record.captured_at.isoformat()}\nWindow: {record.window_title}\nApplication: {record.active_application}\n"
+        prompt = self._build_prompt(record)
         generation_config = {
             "max_output_tokens": self._settings.max_tokens,
             "temperature": self._settings.temperature,
@@ -84,20 +67,15 @@ class GeminiAnalyzer:
             retry_buffer_seconds=self._settings.retry_buffer_seconds,
         )
         text = response.text or "{}"
-        payload = self._parse_payload(text)
-
-        description = payload.get("description") or text.strip()
-        primary_task = payload.get("primary_task") or "Unclassified"
-        tags = payload.get("tags") or []
-        confidence = float(payload.get("confidence", 0.6))
+        payload = normalize_analysis_payload(parse_analysis_json(text), fallback_text=text)
 
         return AnalysisResult(
             capture_id=record.id or -1,
-            description=description,
-            primary_task=primary_task,
-            confidence=confidence,
-            tags=[str(tag) for tag in tags],
-            raw_response=text,
+            description=payload["description"],
+            primary_task=payload["primary_task"],
+            confidence=payload["confidence"],
+            tags=[str(tag) for tag in payload["tags"]],
+            raw_response=payload_to_json_text(payload),
         )
 
     def _generate_with_retry(
@@ -166,23 +144,14 @@ class GeminiAnalyzer:
         return base + jitter
 
     def _parse_payload(self, text: str) -> dict[str, Any]:
-        cleaned = text.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("\n", 1)[1]
-            if "```" in cleaned:
-                cleaned = cleaned.split("```", 1)[0]
-        try:
-            return json.loads(cleaned)
-        except json.JSONDecodeError:
-            self._logger.warning("Failed to parse Gemini JSON. Keeping raw text.")
-            return {}
+        return parse_analysis_json(text)
 
     def _build_prompt(self, record):  # 既存のプロンプト組み立て関数名に合わせてください
         window_title = getattr(record, "window_title", None)
         process_name = getattr(record, "process_name", None) or getattr(record, "process", None)
 
         prompt = (
-            f"{PROMPT}\nTimestamp: {record.captured_at.isoformat()}\nWindow: {record.window_title}\nApplication: {record.active_application}\n"
+            f"{ANALYSIS_PROMPT}\nTimestamp: {record.captured_at.isoformat()}\nWindow: {record.window_title}\nApplication: {record.active_application}\n"
             + _rdp_hint(window_title, process_name)
         )
         return prompt

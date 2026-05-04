@@ -11,26 +11,9 @@ from typing import Any
 import requests
 from PIL import Image
 
+from .analysis_utils import ANALYSIS_PROMPT, normalize_analysis_payload, parse_analysis_json, payload_to_json_text
 from .config import LocalLLMSettings
 from .models import AnalysisResult, CaptureRecord
-
-SYSTEM_PROMPT = """
-You are Miru-Log, a meticulous self-tracking assistant. You receive desktop screenshots and contextual metadata.
-Analyze what the user was doing. Respond strictly as compact JSON with keys:
-  - description: 1 sentence summary of the activity.
-    - primary_task: concise task label (<=6 words). Prefer ONE from:
-        ["開発(コード)", "デバッグ/不具合対応", "テスト/ビルド", "レビュー/品質確認", "調査/検討",
-         "ドキュメント/記録", "連絡/調整", "ミーティング", "計画/タスク管理", "環境/運用",
-         "閲覧/学習", "事務/資料", "デザイン/図解", "休憩/雑務", "その他"].
-  - tags: array of activity tags/keywords.
-  - confidence: float between 0 and 1 reflecting your certainty.
-    - observed_files: array of file paths/names you can read from the screenshot (if any).
-    - observed_repositories: array of repository/workspace names you can read from the screenshot (if any).
-    - observed_urls: array of http(s) URLs you can read from the screenshot (if any).
-All values must be written in Japanese. The JSON keys must remain in English as listed above.
-Focus on observable actions only.
-If you cannot confidently read items, return empty arrays for those keys.
-""".strip()
 
 
 @dataclass(frozen=True)
@@ -78,45 +61,18 @@ class LocalLLMAnalyzer:
             f"Application: {record.active_application}\n"
         )
 
-        response = self._chat_with_image(system=SYSTEM_PROMPT, user_text=user_text, image_path=record.image_path)
+        system_prompt = self._build_prompt(record)
+        response = self._chat_with_image(system=system_prompt, user_text=user_text, image_path=record.image_path)
         text = response.text or "{}"
-        payload = self._parse_payload(text)
-
-        description = payload.get("description") or text.strip()
-        primary_task = payload.get("primary_task") or "Unclassified"
-        tags = payload.get("tags") or []
-        confidence_value = payload.get("confidence", 0.6)
-
-        # Ensure confidence is a float or fallback to default
-        if isinstance(confidence_value, dict):
-            self._logger.warning("Unexpected type for confidence: dict. Using default value 0.6.")
-            confidence = 0.6
-        else:
-            try:
-                confidence = float(confidence_value)
-            except (TypeError, ValueError):
-                self._logger.error(f"Failed to convert confidence to float: {confidence_value}. Using default value 0.6.")
-                confidence = 0.6
-
-        # Trim observed_files if it exceeds a reasonable length
-        if "observed_files" in payload and isinstance(payload["observed_files"], list):
-            max_files = 20  # Limit the number of files to include
-            if len(payload["observed_files"]) > max_files:
-                self._logger.warning(
-                    f"Observed files list too long ({len(payload['observed_files'])} items). Trimming to {max_files}."
-                )
-                payload["observed_files"] = payload["observed_files"][:max_files] + ["... (truncated)"]
-
-        # Debugging: Log the payload to investigate the structure
-        self._logger.debug(f"Payload content: {payload}")
+        payload = normalize_analysis_payload(parse_analysis_json(text), fallback_text=text)
 
         return AnalysisResult(
             capture_id=record.id or -1,
-            description=description,
-            primary_task=primary_task,
-            confidence=confidence,
-            tags=[str(tag) for tag in tags],
-            raw_response=text,
+            description=payload["description"],
+            primary_task=payload["primary_task"],
+            confidence=payload["confidence"],
+            tags=[str(tag) for tag in payload["tags"]],
+            raw_response=payload_to_json_text(payload),
         )
 
     def _chat_with_image(self, *, system: str, user_text: str, image_path: Path) -> _OpenAIChatResponse:
@@ -247,35 +203,14 @@ class LocalLLMAnalyzer:
         return f"data:image/png;base64,{encoded}"
 
     def _parse_payload(self, text: str) -> dict[str, Any]:
-        cleaned = text.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("\n", 1)[1]
-            if "```" in cleaned:
-                cleaned = cleaned.split("```", 1)[0]
-        try:
-            return json.loads(cleaned)
-        except json.JSONDecodeError:
-            # Try to salvage the first JSON object contained in the output.
-            match = re.search(r"\{[\s\S]*\}", cleaned)
-            if match:
-                candidate = match.group(0)
-                try:
-                    return json.loads(candidate)
-                except json.JSONDecodeError:
-                    pass
-
-            self._logger.warning(f"Failed to parse Local LLM JSON. Raw text: {cleaned}")
-            if match:
-                self._logger.debug(f"Candidate JSON: {candidate}")
-
-            return {}
+        return parse_analysis_json(text)
 
     def _build_prompt(self, record):  # 既存のプロンプト組み立て関数名に合わせてください
         window_title = getattr(record, "window_title", None)
         process_name = getattr(record, "process_name", None) or getattr(record, "process", None)
 
         prompt = (
-            SYSTEM_PROMPT
+            ANALYSIS_PROMPT
             + _rdp_hint(window_title, process_name)
         )
         return prompt
