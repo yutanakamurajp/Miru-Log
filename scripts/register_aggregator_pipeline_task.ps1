@@ -38,6 +38,10 @@ $batchPath = Join-Path $resolvedRepoRoot "scripts\run_pipeline_aggregator.bat"
 if (-not (Test-Path $batchPath)) {
   throw "Batch file not found: $batchPath"
 }
+$taskRunnerPath = Join-Path $resolvedRepoRoot "scripts\run_pipeline_aggregator_task.ps1"
+if (-not (Test-Path $taskRunnerPath)) {
+  throw "Task runner script not found: $taskRunnerPath"
+}
 
 $resolvedDataRoot = Resolve-OptionalPath $DataRoot
 $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -68,12 +72,25 @@ foreach ($arg in $PipelineArgs) {
   }
 }
 
-$batchCommand = (Quote-ForCmd $batchPath)
+$runnerArgs = New-Object System.Collections.Generic.List[string]
+$runnerArgs.Add('-ExecutionPolicy')
+$runnerArgs.Add('Bypass')
+$runnerArgs.Add('-File')
+$runnerArgs.Add((Quote-ForCmd $taskRunnerPath))
+$runnerArgs.Add('-RepoRoot')
+$runnerArgs.Add((Quote-ForCmd $resolvedRepoRoot))
+if ($resolvedDataRoot) {
+  $runnerArgs.Add('-DataRoot')
+  $runnerArgs.Add((Quote-ForCmd $resolvedDataRoot))
+}
 if ($batchArgs.Count -gt 0) {
-  $batchCommand += " " + [string]::Join(' ', $batchArgs)
+  $runnerArgs.Add('-BatchArgs')
+  foreach ($arg in $batchArgs) {
+    $runnerArgs.Add($arg)
+  }
 }
 
-$cmdArguments = "/c " + (Quote-ForCmd ("cd /d " + (Quote-ForCmd $resolvedRepoRoot) + " && call " + $batchCommand))
+$powershellArguments = [string]::Join(' ', $runnerArgs)
 
 if ($AtLogOn) {
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
@@ -84,7 +101,7 @@ if ($AtLogOn) {
   $scheduleText = "Daily at $DailyTime"
 }
 
-$action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument $cmdArguments
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $powershellArguments
 $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 $description = "Run Miru-Log aggregator pipeline on the aggregation PC."
@@ -98,7 +115,7 @@ if ($resolvedDataRoot) {
 } else {
   Write-Host "DataRoot: use ANALYZER_DATA_ROOT from .env"
 }
-Write-Host "Command: cmd.exe $cmdArguments"
+Write-Host "Command: powershell.exe $powershellArguments"
 
 if ($PSCmdlet.ShouldProcess($TaskName, "Register scheduled task")) {
   Register-ScheduledTask `
