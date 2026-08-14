@@ -123,7 +123,7 @@ def get_settings() -> AppSettings:
 
     gemini = GeminiSettings(
         api_key=gemini_api_key or "",
-        model=os.getenv("GEMINI_MODEL", "gemini-pro-vision"),
+        model=os.getenv("GEMINI_MODEL", "gemini-3.7-flash"),
         max_tokens=int(os.getenv("GEMINI_MAX_TOKENS", "1024")),
         temperature=float(os.getenv("GEMINI_TEMPERATURE", "0.4")),
         max_retries=int(os.getenv("GEMINI_MAX_RETRIES", "5")),
